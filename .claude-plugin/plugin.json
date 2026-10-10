@@ -1,0 +1,10 @@
+{
+  "name": "llm-wiki",
+  "version": "0.1.0",
+  "description": "A personal knowledge base that Claude writes and maintains: drop sources into raw/, ingest them into interlinked, cited markdown pages, query with citations, lint for rot. Reads PDFs page by page, images included.",
+  "author": { "name": "Barak Gutman", "url": "https://github.com/barakgut" },
+  "homepage": "https://github.com/barakgut/llm-wiki",
+  "repository": "https://github.com/barakgut/llm-wiki",
+  "license": "MIT",
+  "keywords": ["wiki", "knowledge-base", "second-brain", "obsidian", "notes", "pdf", "research", "pkm"]
+}

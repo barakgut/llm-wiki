@@ -1,0 +1,14 @@
+{
+  "name": "llm-wiki",
+  "owner": { "name": "Barak Gutman", "url": "https://github.com/barakgut" },
+  "description": "LLM Wiki - a knowledge base that Claude writes and maintains for you.",
+  "plugins": [
+    {
+      "name": "llm-wiki",
+      "source": "./",
+      "description": "Ingest sources into an interlinked, cited markdown wiki; query it; keep it healthy. Works with Obsidian.",
+      "category": "productivity",
+      "keywords": ["wiki", "knowledge-base", "second-brain", "obsidian", "pdf", "research"]
+    }
+  ]
+}
