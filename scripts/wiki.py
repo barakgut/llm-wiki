@@ -30,7 +30,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from wikiroot import PLUGIN, find_roots, given, kit, shown
+from wikiroot import PLUGIN, find_roots, given, kit, several, shown
 
 ROOTS = find_roots()
 ROOT = ROOTS[0] if len(ROOTS) == 1 else None
@@ -310,14 +310,20 @@ def cmd_links(a):
 # ---------- new ----------
 
 def raw_rel(arg):
-    """The `raw:` value of a source page: the file's path from the wiki root."""
+    """The `raw:` value of a source page: the file's path from the wiki root. None for a file outside the wiki."""
     p = given(ROOT, arg)
-    return p.relative_to(ROOT).as_posix() if ROOT in p.parents else arg
+    if ROOT in p.parents:
+        return p.relative_to(ROOT).as_posix()
+    return None if p.exists() else arg
 
 
 def cmd_new(a):
     if a.type not in TYPE_DIR or a.type == "overview":
         print(f"type must be one of: {', '.join(t for t in TYPE_DIR if t != 'overview')}", file=sys.stderr)
+        return 1
+    raw = raw_rel(a.raw) if a.raw else ""
+    if raw is None:
+        print(f"--raw must be a file in the wiki, under {show('raw')}/: {a.raw}", file=sys.stderr)
         return 1
     slug = a.slug or slugify(a.title)
     for p in load_pages():
@@ -326,7 +332,7 @@ def cmd_new(a):
             return 1
     tpl = kit("templates", f"{a.type}.md", ROOT).read_text(encoding="utf-8")
     fill = {"title": yaml_str(a.title), "h1": a.title, "summary": yaml_str(a.summary or ""),
-            "raw": raw_rel(a.raw) if a.raw else "", "tags": ", ".join(t.strip() for t in (a.tags or "").split(",") if t.strip()),
+            "raw": raw, "tags": ", ".join(t.strip() for t in (a.tags or "").split(",") if t.strip()),
             "sources": ", ".join(s.strip() for s in (a.sources or "").split(",") if s.strip()),
             "date": today()}
     for k, v in fill.items():
@@ -657,9 +663,12 @@ def on_path():
         return
     line = f"export PATH={shlex.quote(str(PLUGIN / 'bin'))}:\"$PATH\"\n"
     f = Path(env)
-    if not f.exists() or line not in f.read_text(encoding="utf-8"):
-        with f.open("a", encoding="utf-8") as out:
-            out.write(line)
+    try:
+        if not f.exists() or line not in f.read_text(encoding="utf-8"):
+            with f.open("a", encoding="utf-8") as out:
+                out.write(line)
+    except OSError:
+        pass  # the status still prints; the CLI is then reached by its path
 
 
 # ---------- ref ----------
@@ -747,8 +756,7 @@ def main():
     if NO_WIKI and a.cmd != "ref":
         hook = getattr(a, "hook", False)
         if ROOTS:
-            msg = ("several wikis below this directory - cd into one, or set LLM_WIKI_ROOT:\n"
-                   + "\n".join(f"  {shown(r, '.')}" for r in ROOTS))
+            msg = several(ROOTS)
             if hook:
                 print(msg)
             sys.exit(0 if hook else msg)

@@ -48,7 +48,7 @@ Each session starts with a status line for the agent: where the wiki is, page co
 
 ## Using it as a project's knowledge base
 
-Put the wiki in a subfolder of the project and work from the project root, in the same session you code in. The tooling finds a wiki in the current folder, above it, or up to four levels below it, so there is no second session and nothing to configure.
+Put the wiki in a subfolder of the project and work from the project root, in the same session you code in. The tooling finds a wiki in the current folder, above it, or up to four levels below it (in a very large tree, among the 2,000 folders nearest the top), so there is no second session and nothing to configure.
 
 The wiki is for what the code cannot tell you: architecture decision records, design documents, specifications, the standards you implement, meeting notes, the reasons behind a choice. Leave the code out of it. The agent reads code directly, and a copy in the wiki would only go stale.
 

@@ -5,21 +5,27 @@ from pathlib import Path
 MARKER = ".llm-wiki"
 PLUGIN = Path(__file__).resolve().parents[1]
 DEPTH = 4  # levels searched below the start directory
+LIMIT = 2000  # directories one search looks at, so a hook stays quick in a large tree
 SKIP = {"node_modules", "vendor", "venv", "dist", "build", "target", "__pycache__"}
 
 
-def below(base):
-    """Wikis under `base`, at most DEPTH levels down. Hidden and SKIP directories are passed over; a wiki is not searched."""
-    found, level = [], [str(base)]
+def below(base, done=()):
+    """Wikis under `base`, at most DEPTH levels down and LIMIT directories looked at, nearest first.
+    Hidden, SKIP and `done` directories are passed over; a wiki is not searched."""
+    found, level, seen = [], [str(base)], 0
     for _ in range(DEPTH):
         deeper = []
         for d in level:
             try:
                 subs = sorted(e.path for e in os.scandir(d)
-                              if e.is_dir(follow_symlinks=False) and not e.name.startswith(".") and e.name not in SKIP)
+                              if e.is_dir(follow_symlinks=False) and not e.name.startswith(".") and e.name not in SKIP
+                              and e.path not in done)
             except OSError:
                 continue
             for s in subs:
+                if seen == LIMIT:
+                    return found
+                seen += 1
                 if os.path.isdir(os.path.join(s, MARKER)):
                     found.append(Path(s))
                 else:
@@ -40,10 +46,12 @@ def find_roots(start=None):
         for d in (p, *p.parents):
             if (d / MARKER).is_dir():
                 return [d]
+    done = []
     for p in dict.fromkeys(bases):
-        found = below(p)
+        found = below(p, done)
         if found:
             return found
+        done.append(str(p))
     return []
 
 
@@ -59,11 +67,19 @@ def shown(root, rel):
 
 
 def given(root, path):
-    """A path argument: relative to the current directory, or to the wiki root when nothing is there."""
+    """A path argument: relative to the current directory, or to the wiki root when nothing is there
+    or what is there lies outside the wiki."""
     p = Path(path).expanduser()
-    if not p.is_absolute() and not p.exists() and (Path(root) / p).exists():
-        p = Path(root) / p
-    return p.resolve()
+    here, there = p.resolve(), (Path(root) / p).resolve()
+    if not p.is_absolute() and there.exists() and not (here.exists() and Path(root) in here.parents):
+        return there
+    return here
+
+
+def several(roots):
+    """The error for more than one wiki in reach."""
+    return ("several wikis below this directory - cd into one, or set LLM_WIKI_ROOT:\n"
+            + "\n".join(f"  {shown(r, '.')}" for r in roots))
 
 
 def kit(kind, name, root=None):

@@ -147,6 +147,8 @@ class Smoke(Base):
         for _ in range(2):
             self.assertEqual(self.cli("stats", "--hook", env={"CLAUDE_ENV_FILE": str(env_file)}).returncode, 0)
         self.assertEqual(env_file.read_text().count("export PATH="), 1)
+        r = self.cli("stats", "--hook", env={"CLAUDE_ENV_FILE": str(self.top / "no-such-dir" / "env.sh")})
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
         r = subprocess.run(["sh", "-c", f". {shlex.quote(str(env_file))}; cd /; llm-wiki ref"], capture_output=True, text=True,
                            env=self.env)
         self.assertIn("page-formats", r.stdout, r.stderr)
@@ -197,10 +199,19 @@ class Project(Base):
         self.assertEqual(self.cli("check", "wiki/concepts/ledger.md").returncode, 0)
         (self.here / "raw").mkdir()
         (self.here / "raw" / "adr-1.md").write_text("the project's own file\n")
-        r = self.cli("new", "source", "Not a wiki source", "--raw", "raw/adr-1.md")
+        r = self.cli("new", "source", "The wiki's file, not the project's", "--raw", "raw/adr-1.md")
         self.assertIn("raw: raw/adr-1.md", (self.here / r.stdout.strip()).read_text())
-        (self.here / "raw" / "adr-1.md").unlink()
-        (self.here / "raw").rmdir()
+        (self.here / "raw" / "only-here.md").write_text("not in the wiki\n")
+        r = self.cli("new", "source", "Not a wiki source", "--raw", "raw/only-here.md")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--raw must be a file in the wiki", r.stderr)
+        shutil.rmtree(self.here / "raw")
+        inner = self.root / "raw" / "raw"
+        inner.mkdir()
+        (inner / "adr-1.md").write_text("a file the current directory reaches first\n")
+        r = self.cli("new", "source", "Current directory wins", "--raw", "raw/adr-1.md", cwd=self.root / "raw")
+        self.assertIn("raw: raw/raw/adr-1.md", (self.root / "raw" / r.stdout.strip()).read_text())
+        shutil.rmtree(inner)
 
     def test_3_guard_from_the_project_root(self):
         (self.root / "raw" / "spec.md").write_text("spec\n")
@@ -255,23 +266,29 @@ class Project(Base):
         self.assertEqual(r.returncode, 0)
         self.assertIn("several wikis", r.stdout)
         self.assertEqual(self.cli("lint", cwd=two, env={"LLM_WIKI_ROOT": str(two / "notes")}).returncode, 0)
-        (two / "notes" / "raw" / "s.md").write_text("s\n")
-        r = self.hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": "rm notes/raw/s.md"}, "cwd": str(two)})
-        self.assertEqual(r.returncode, 2)
+        self.assertIn("several wikis", self.cli("pdf", "x.pdf", cwd=two).stderr)
+        for name in ("docs/wiki", "notes"):
+            (two / name / "raw" / "s.md").write_text("s\n")
+            r = self.hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": f"rm {name}/raw/s.md"}, "cwd": str(two)})
+            self.assertEqual(r.returncode, 2, name)
 
     def test_7_search_is_quick(self):
         big = self.top / "big"
-        for i in range(100):
-            d = big / f"pkg{i:03d}" / "src"
-            d.mkdir(parents=True)
-            for j in range(100):
-                (d / f"f{j}.py").touch()
+        for i in range(20):
+            for j in range(20):
+                for k in range(25):
+                    d = big / f"pkg{i:02d}" / f"mod{j:02d}" / f"dir{k:02d}"
+                    d.mkdir(parents=True)
+                    (d / "f.py").touch()
         sys.path.insert(0, str(self.kit / "scripts"))
         from wikiroot import find_roots
-        with mock.patch.dict(os.environ, self.env, clear=True):
-            t = time.perf_counter()
-            self.assertEqual(find_roots(big), [])
-            self.assertLess(time.perf_counter() - t, 0.05)
+        with mock.patch.dict(os.environ, dict(self.env, CLAUDE_PROJECT_DIR=str(big)), clear=True):
+            for start in (big, big / "pkg00"):
+                t = time.perf_counter()
+                self.assertEqual(find_roots(start), [])
+                self.assertLess(time.perf_counter() - t, 0.05)
+            (big / "docs" / "wiki" / ".llm-wiki").mkdir(parents=True)
+            self.assertEqual(find_roots(big / "pkg00"), [big / "docs" / "wiki"])
 
 
 class LooseSmoke(Smoke):

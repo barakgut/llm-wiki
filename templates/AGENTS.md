@@ -27,7 +27,7 @@ Each is a skill.
 - **wiki-query** - any question the wiki might answer; use it whenever that applies. An answer worth keeping is filed after the user confirms it is correct.
 - **wiki-lint** - user-invoked only (`/wiki-lint`). Health check, cleanup, gap analysis. It fixes links and frontmatter and proposes any change to what a page claims.
 
-Outside an ingest the user started, the wiki is written only on the user's word: propose the page edit, the filing or the correction, and make it when they approve.
+Outside an ingest the user started and lint's fixes to links and frontmatter, the wiki is written only on the user's word: propose the page edit, the filing or the correction, and make it when they approve.
 
 Never start an ingest or a lint pass yourself. When one looks due (pending sources, a request phrased as "ingest this" / "lint the wiki"), tell the user to run the command.
 

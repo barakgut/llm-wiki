@@ -23,7 +23,7 @@ Paths written here (`raw/…`, `wiki/…`, `AGENTS.md`) are from the wiki root; 
 | `broken-link` / `missing-page` | create the page if 2+ pages want it or it is a real entity/concept; otherwise unlink |
 | `bad-source` `unsourced` `uncited` | find the backing source page (`llm-wiki search`), cite it; an unverifiable claim is marked `Unsourced:`, and its removal is a proposal |
 | `duplicate` | propose the merge: one page, the other name in `aliases:`, links repointed |
-| `orphan` | link it from the pages that should mention it (`llm-wiki search "<title>"`), or merge it away |
+| `orphan` | link it from the pages that should mention it (`llm-wiki search "<title>"`); merging it into another page is a proposal |
 | `stale` | re-read the newer source page and propose what it changes on the page |
 | `page-size` | move a section or sub-topic to a page of its own per `llm-wiki ref page-formats` (Page size and sibling pages) |
 | `stub` | propose: expand from its sources, or merge into a parent page |
@@ -31,7 +31,7 @@ Paths written here (`raw/…`, `wiki/…`, `AGENTS.md`) are from the wiki root; 
 | `contradiction` | resolvable from the sources? propose the `[!resolved]` rewrite. Otherwise keep and list it in the report |
 | `pending` | list in the report; ingest only if the user asks |
 
-Done when `llm-wiki lint` shows 0 errors and every remaining warning is one you chose to keep, with a reason, or one that waits on a proposal.
+Done when every error and warning `llm-wiki lint` still shows either waits on a proposal or is a warning you chose to keep, with a reason.
 
 ## 2. Semantic
 
