@@ -1,5 +1,5 @@
 ---
-name: ingest
+name: wiki-ingest
 description: Ingest a raw source into the wiki - write its source page and integrate it into entity, concept and overview pages. Use when the user adds a file to raw/, pastes or links something to file, or says ingest/process/add this.
 disable-model-invocation: true
 argument-hint: "[raw/<file> | URL] [unattended]"
@@ -9,16 +9,18 @@ argument-hint: "[raw/<file> | URL] [unattended]"
 
 Page conventions: `llm-wiki ref page-formats` - read it before the first ingest of a session.
 
+Paths written here (`raw/…`, `wiki/…`, `AGENTS.md`) are from the wiki root; the first line of `llm-wiki stats` says where that is. The CLI takes them as written and prints paths from the current directory: open, write and edit files by the printed form.
+
 Ingest one source at a time. For a batch, run this whole sequence per source.
 
 ## Dispatch (main session)
 
-The main session selects, dispatches and talks to the user; the reading and writing happen in `llm-wiki:ingester` subagents, each in a fresh context. A subagent given one of the assignments below goes straight to Steps.
+The main session selects, dispatches and talks to the user; the reading and writing happen in `wiki-ingester` subagents, each in a fresh context. A subagent given one of the assignments below goes straight to Steps.
 
 1. **Select** (step 1). For a PDF, run `llm-wiki pdf raw/<file>.pdf` and note the number of chunks. A text source over about 3,000 lines counts as multi-chunk.
-2. **Read.** Dispatch `llm-wiki:ingester` with `read raw/<file>`. Multi-chunk PDF: one `read chunk N of raw/<file>.pdf` per chunk, up to 4 at a time (they write separate notes files). Done when `llm-wiki pdf raw/<file>.pdf --plan` shows every chunk `done`; re-dispatch any that is `todo`.
+2. **Read.** Dispatch `wiki-ingester` with `read raw/<file>`. Multi-chunk PDF: one `read chunk N of raw/<file>.pdf` per chunk, up to 4 at a time (they write separate notes files). Done when `llm-wiki pdf raw/<file>.pdf --plan` shows every chunk `done`; re-dispatch any that is `todo`.
 3. **Discuss** (step 3), from the readers' reports. For more detail read the notes files' Summary sections, leaving the source itself to the subagents.
-4. **Integrate.** Dispatch one `llm-wiki:ingester` with `integrate raw/<file>` and the user's steer.
+4. **Integrate.** Dispatch one `wiki-ingester` with `integrate raw/<file>` and the user's steer.
    - **More than 3 notes files: integrate in passes**, so no context holds the whole document. Group the notes files in order, 2-3 per pass along clause boundaries, and dispatch `integrate raw/<file> - pass K of N: notes <files>` one pass at a time (passes edit the same pages). Every prompt carries the user's steer and what earlier passes created or left open. Pass 1 creates the source page with a `[!todo]` integration-status marker and a stub per part not yet integrated, and its sibling pages; each pass fills its part and ends at `llm-wiki lint` 0 errors; the last pass removes the marker and every other staging trace, revises the overview and writes the one log entry for the whole ingest.
    - **A pass reads sections, not pages**, so its context does not grow with the passes before it. From the source page it reads the status marker, the structure table and Open questions (`grep -n '^## '` for the line numbers, then `Read` with `offset` and `limit`). To a sibling page it appends after reading only the page's last lines.
 5. **Report** (step 10) from its report - for a staged integration, from all the passes' reports. If it ended with lint errors, dispatch `integrate` again with those errors.

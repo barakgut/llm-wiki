@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Entry point of the llm-wiki CLI. Claude Code puts a plugin's bin/ on the Bash tool's PATH."""
+"""Entry point of the llm-wiki CLI. On the Bash tool's PATH: Claude Code adds a plugin's bin/, and the
+SessionStart hook adds this directory when the tooling sits in a project's .claude/."""
 import os
 import sys
 

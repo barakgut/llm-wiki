@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from wikiroot import find_root
+from wikiroot import find_root, given, shown
 
 ROOT = find_root() or Path.cwd()
 RAW = ROOT / "raw"
@@ -50,6 +50,10 @@ def slugify(s):
     return re.sub(r"[\W_]+", "-", s.lower()).strip("-")
 
 
+def show(rel):
+    return shown(ROOT, rel)
+
+
 def list_images(pdf):
     """Rows of `pdfimages -list`: page, num, type, width, height, object id."""
     rows = []
@@ -63,17 +67,17 @@ def list_images(pdf):
 
 def describe(i):
     extra = f"{i['width']}x{i['height']}" if i["kind"] == "image" else "page render"
-    return f"  {i['file']}  (p.{i['page']}, {extra}{' - ' + i['note'] if i.get('note') else ''})"
+    return f"  {show(i['file'])}  (p.{i['page']}, {extra}{' - ' + i['note'] if i.get('note') else ''})"
 
 
 def show_plan(man):
     chunks = man["chunks"]
     done = sum((ROOT / c["notes"]).exists() for c in chunks)
-    print(f"{man['pdf']}: {man['pages']} pages, {len(man['images'])} images, "
+    print(f"{show(man['pdf'])}: {man['pages']} pages, {len(man['images'])} images, "
           f"{len(chunks)} chunk{'s' if len(chunks) != 1 else ''}, {done} with notes")
     for c in chunks:
         state = "done" if (ROOT / c["notes"]).exists() else "todo"
-        print(f"  chunk {c['id']:>3}  pages {c['pages'][0]}-{c['pages'][1]}  {c['images']:>3} images  {state}  {c['notes']}")
+        print(f"  chunk {c['id']:>3}  pages {c['pages'][0]}-{c['pages'][1]}  {c['images']:>3} images  {state}  {show(c['notes'])}")
 
 
 def show_chunk(man, n):
@@ -82,12 +86,12 @@ def show_chunk(man, n):
         sys.exit(f"no chunk {n}; chunks are 1-{len(man['chunks'])}")
     a, b = c["pages"]
     imgs = [i for i in man["images"] if a <= i["page"] <= b]
-    print(f"chunk {n}/{len(man['chunks'])} of {man['pdf']} - pages {a}-{b}")
-    print(f"text:   Read {man['text']} offset={c['text_lines'][0]} limit={c['text_lines'][1] - c['text_lines'][0] + 1}")
+    print(f"chunk {n}/{len(man['chunks'])} of {show(man['pdf'])} - pages {a}-{b}")
+    print(f"text:   Read {show(man['text'])} offset={c['text_lines'][0]} limit={c['text_lines'][1] - c['text_lines'][0] + 1}")
     print(f"images: {len(imgs)} - Read every one")
     for i in imgs:
         print(describe(i))
-    print(f"notes:  write {c['notes']}")
+    print(f"notes:  write {show(c['notes'])}")
 
 
 def main():
@@ -104,8 +108,8 @@ def main():
     a = ap.parse_args()
 
     if not find_root():
-        sys.exit("not inside an llm-wiki (no .llm-wiki/ here or above) - cd into one, or run: llm-wiki init")
-    pdf = Path(a.pdf).resolve()
+        sys.exit("no llm-wiki here, above or below (no .llm-wiki/) - cd into one, or run: llm-wiki init")
+    pdf = given(ROOT, a.pdf)
     if not pdf.is_file():
         sys.exit(f"not a file: {a.pdf}")
     if RAW not in pdf.parents:
@@ -117,7 +121,7 @@ def main():
 
     if a.plan or a.chunk is not None:
         if not man_path.exists():
-            sys.exit(f"not extracted yet - run: llm-wiki pdf {rel(pdf)}")
+            sys.exit(f"not extracted yet - run: llm-wiki pdf {show(rel(pdf))}")
         man = json.loads(man_path.read_text(encoding="utf-8"))
         show_chunk(man, a.chunk) if a.chunk is not None else show_plan(man)
         return
@@ -239,7 +243,7 @@ def main():
                 "chunks": chunks, "images": images, "skipped": skipped}
     man_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
-    print(f"extracted: {manifest['text_chars']} chars of text -> {manifest['text']}; "
+    print(f"extracted: {manifest['text_chars']} chars of text -> {show(manifest['text'])}; "
           f"{len(skipped)} images skipped as masks/repeats/tiny")
     show_plan(manifest)
     if not manifest["text_chars"]:
@@ -247,7 +251,7 @@ def main():
     if len(chunks) > 1:
         print("LARGE: read it chunk by chunk, one context per chunk (`llm-wiki ref pdf-ingest`)")
     else:
-        print("work list: llm-wiki pdf " + json.dumps(rel(pdf)) + " --chunk 1")
+        print("work list: llm-wiki pdf " + json.dumps(show(rel(pdf))) + " --chunk 1")
 
 
 if __name__ == "__main__":

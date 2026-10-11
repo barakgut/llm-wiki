@@ -15,21 +15,25 @@
   pdf      PDF -> text + every image + page renders, with a chunk plan (llm-wiki pdf --help)
   ref      print a reference: page formats, PDF ingest, output formats, the workflows
 
-Runs on the wiki that contains the current directory (the folder holding `.llm-wiki/`),
-or on $LLM_WIKI_ROOT.
+Runs on the wiki that contains the current directory (the folder holding `.llm-wiki/`), else on the
+one wiki below it, or on $LLM_WIKI_ROOT. Paths are printed relative to the current directory; a path
+argument may be relative to it or to the wiki root.
 """
 import argparse
 import datetime
 import json
 import math
+import os
 import re
+import shlex
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from wikiroot import PLUGIN, find_root, kit
+from wikiroot import PLUGIN, find_roots, given, kit, shown
 
-ROOT = find_root()
+ROOTS = find_roots()
+ROOT = ROOTS[0] if len(ROOTS) == 1 else None
 NO_WIKI = ROOT is None
 ROOT = ROOT or Path.cwd()
 WIKI = ROOT / "wiki"
@@ -58,6 +62,10 @@ def today():
 
 def slugify(s):
     return re.sub(r"[\W_]+", "-", s.lower()).strip("-")
+
+
+def show(rel):
+    return shown(ROOT, rel)
 
 
 # ---------- frontmatter ----------
@@ -250,6 +258,8 @@ def cmd_search(a):
     if a.tag:
         docs = [d for d in docs if a.tag in d["tags"]]
     hits = search(docs, query, a.n)
+    for h in hits:
+        h["path"] = show(h["path"])
     if a.json:
         print(json.dumps(hits, ensure_ascii=False, indent=1))
         return 0
@@ -285,19 +295,25 @@ def cmd_links(a):
         print(f"no page '{a.page}'", file=sys.stderr)
         return 1
     by_slug = {q.slug: q for q in pages}
-    print(f"{p.rel}  [{p.type}] {p.title}")
+    print(f"{show(p.rel)}  [{p.type}] {p.title}")
     print("out:")
     for s in dict.fromkeys(p.links + p.lst("sources")):
         q = by_slug.get(s)
-        print(f"  {q.rel} — {q.get('summary')}" if q else f"  [[{s}]] (missing)")
+        print(f"  {show(q.rel)} — {q.get('summary')}" if q else f"  [[{s}]] (missing)")
     print("in:")
     for q in pages:
         if q is not p and (p.slug in q.links or p.slug in q.lst("sources")):
-            print(f"  {q.rel} — {q.get('summary')}")
+            print(f"  {show(q.rel)} — {q.get('summary')}")
     return 0
 
 
 # ---------- new ----------
+
+def raw_rel(arg):
+    """The `raw:` value of a source page: the file's path from the wiki root."""
+    p = given(ROOT, arg)
+    return p.relative_to(ROOT).as_posix() if ROOT in p.parents else arg
+
 
 def cmd_new(a):
     if a.type not in TYPE_DIR or a.type == "overview":
@@ -306,11 +322,11 @@ def cmd_new(a):
     slug = a.slug or slugify(a.title)
     for p in load_pages():
         if p.slug == slug:
-            print(f"exists: {p.rel} - update it instead", file=sys.stderr)
+            print(f"exists: {show(p.rel)} - update it instead", file=sys.stderr)
             return 1
     tpl = kit("templates", f"{a.type}.md", ROOT).read_text(encoding="utf-8")
     fill = {"title": yaml_str(a.title), "h1": a.title, "summary": yaml_str(a.summary or ""),
-            "raw": a.raw or "", "tags": ", ".join(t.strip() for t in (a.tags or "").split(",") if t.strip()),
+            "raw": raw_rel(a.raw) if a.raw else "", "tags": ", ".join(t.strip() for t in (a.tags or "").split(",") if t.strip()),
             "sources": ", ".join(s.strip() for s in (a.sources or "").split(",") if s.strip()),
             "date": today()}
     for k, v in fill.items():
@@ -319,7 +335,7 @@ def cmd_new(a):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tpl, encoding="utf-8")
     write_index(load_pages())
-    print(path.relative_to(ROOT).as_posix())
+    print(show(path.relative_to(ROOT)))
     return 0
 
 
@@ -365,7 +381,7 @@ def cmd_index(a):
     pages = load_pages()
     changed = write_index(pages)
     if not a.quiet:
-        print(f"wiki/index.md: {len(pages)} pages, {'updated' if changed else 'unchanged'}")
+        print(f"{show('wiki/index.md')}: {len(pages)} pages, {'updated' if changed else 'unchanged'}")
     return 0
 
 
@@ -412,7 +428,7 @@ def pending(pages):
 
 
 def cmd_pending(a):
-    print("\n".join(pending(load_pages())) or "(nothing pending)")
+    print("\n".join(show(r) for r in pending(load_pages())) or "(nothing pending)")
     return 0
 
 
@@ -458,14 +474,14 @@ def validate_page(p, strict_today=False):
 def cmd_check(a):
     bad = 0
     for f in a.paths:
-        path = Path(f).resolve()
+        path = given(ROOT, f)
         if not path.exists() or WIKI not in path.parents or path in (INDEX, LOG):
             continue
         p = Page(path)
         for sev, code, msg in validate_page(p, strict_today=True):
             if sev == "error":
                 bad += 1
-                print(f"{p.rel}: {msg}")
+                print(f"{show(p.rel)}: {msg}")
     return 1 if bad else 0
 
 
@@ -509,14 +525,14 @@ def lint(pages):
 
     for slug, ps in by_slug.items():
         if len(ps) > 1:
-            add("error", "duplicate", ps[0].rel, "same filename as " + ", ".join(q.rel for q in ps[1:]))
+            add("error", "duplicate", ps[0].rel, "same filename as " + ", ".join(show(q.rel) for q in ps[1:]))
     names = defaultdict(set)
     for p in pages:
         for nm in [p.title] + p.lst("aliases"):
             names[nm.lower()].add(p.rel)
     for nm, rels in names.items():
         if len(rels) > 1:
-            add("warn", "duplicate", sorted(rels)[0], f"title/alias '{nm}' shared with {', '.join(sorted(rels)[1:])} - merge?")
+            add("warn", "duplicate", sorted(rels)[0], f"title/alias '{nm}' shared with {', '.join(show(r) for r in sorted(rels)[1:])} - merge?")
 
     for p in pages:
         if p.type != "overview" and not (inbound[p.slug] - {p.slug}):
@@ -565,7 +581,7 @@ def lint(pages):
         p = min(sibs, key=lambda q: q.slug)  # the source page itself: siblings are <slug>-<part>
         man = RAW / "assets" / slugify(Path(r).stem) / "manifest.json"
         if not man.exists():
-            add("error", "pdf-extract", p.rel, f"PDF not extracted - run: llm-wiki pdf {r}")
+            add("error", "pdf-extract", p.rel, f"PDF not extracted - run: llm-wiki pdf {show(r)}")
             continue
         # an image counts as read when a source page of this PDF or a reading-notes file names it
         seen = "".join(q.text for q in sibs) + "".join(n.read_text(encoding="utf-8", errors="replace")
@@ -573,10 +589,10 @@ def lint(pages):
         data = json.loads(man.read_text(encoding="utf-8"))
         for c in data.get("chunks", []):
             if len(data["chunks"]) > 1 and not (ROOT / c["notes"]).exists():
-                add("error", "pdf-chunk", p.rel, f"chunk {c['id']} (pages {c['pages'][0]}-{c['pages'][1]}) has no reading notes: {c['notes']}")
+                add("error", "pdf-chunk", p.rel, f"chunk {c['id']} (pages {c['pages'][0]}-{c['pages'][1]}) has no reading notes: {show(c['notes'])}")
         unread = [i for i in data.get("images", []) if Path(i["file"]).name not in seen]
         for img in unread[:5]:
-            add("error", "pdf-figure", p.rel, f"image has no Figures entry: {img['file']} (p.{img['page']})")
+            add("error", "pdf-figure", p.rel, f"image has no Figures entry: {show(img['file'])} (p.{img['page']})")
         if len(unread) > 5:
             add("error", "pdf-figure", p.rel, f"... and {len(unread) - 5} more images without a Figures entry")
 
@@ -592,6 +608,7 @@ def cmd_lint(a):
     order = {"error": 0, "warn": 1, "info": 2}
     issues.sort(key=lambda i: (order[i[0]], i[1], i[2]))
     counts = Counter(i[0] for i in issues)
+    issues = [(sev, code, show(path), msg) for sev, code, path, msg in issues]
     if a.json:
         print(json.dumps([dict(zip(("severity", "code", "path", "message"), i)) for i in issues],
                          ensure_ascii=False, indent=1))
@@ -611,9 +628,10 @@ def cmd_stats(a):
     by_type = Counter(p.type or "?" for p in pages)
     pend = pending(pages)
     kinds = ", ".join(f"{n} {t}" for t, n in sorted(by_type.items())) or "empty"
+    print(f"wiki at {show('.')} (schema: {show('AGENTS.md')})")
     print(f"wiki: {len(pages)} pages ({kinds}) · raw: {len(raw_files())} files, {len(pend)} pending ingest")
     if pend:
-        print("pending: " + ", ".join(pend[:8]) + (" …" if len(pend) > 8 else ""))
+        print("pending: " + ", ".join(show(r) for r in pend[:8]) + (" …" if len(pend) > 8 else ""))
     slugs = {p.slug for p in pages}
     inbound = Counter(s for p in pages for s in set(p.links) if s != p.slug and s in slugs)
     if inbound:
@@ -626,7 +644,22 @@ def cmd_stats(a):
         print("recent log:")
         for h in heads:
             print("  " + h[3:])
+    if a.hook:
+        print("a question this wiki may answer: use the wiki-query skill, cite pages as [[slug]], "
+              "and write to the wiki only on the user's word")
     return 0
+
+
+def on_path():
+    """SessionStart: put the CLI on the Bash tool's PATH for the session, wherever the tooling sits."""
+    env = os.environ.get("CLAUDE_ENV_FILE")
+    if not env:
+        return
+    line = f"export PATH={shlex.quote(str(PLUGIN / 'bin'))}:\"$PATH\"\n"
+    f = Path(env)
+    if not f.exists() or line not in f.read_text(encoding="utf-8"):
+        with f.open("a", encoding="utf-8") as out:
+            out.write(line)
 
 
 # ---------- ref ----------
@@ -643,7 +676,7 @@ def cmd_ref(a):
             print(f"{k:15} {v}")
         return 0
     if a.name in ("ingest", "query", "lint"):
-        path = PLUGIN / "skills" / a.name / "SKILL.md"
+        path = PLUGIN / "skills" / f"wiki-{a.name}" / "SKILL.md"
     else:
         path = kit("references", f"{a.name}.md", None if NO_WIKI else ROOT)
     sys.stdout.write(path.read_text(encoding="utf-8"))
@@ -701,7 +734,7 @@ def main():
     s.set_defaults(fn=cmd_lint)
 
     s = sub.add_parser("stats", help="one-screen status")
-    s.add_argument("--hook", action="store_true", help="print nothing outside a wiki")
+    s.add_argument("--hook", action="store_true", help="SessionStart: put the CLI on PATH; print nothing outside a wiki")
     s.set_defaults(fn=cmd_stats)
 
     s = sub.add_parser("ref", help="print a reference document; no name lists them")
@@ -709,10 +742,19 @@ def main():
     s.set_defaults(fn=cmd_ref)
 
     a = ap.parse_args()
+    if getattr(a, "hook", False):
+        on_path()
     if NO_WIKI and a.cmd != "ref":
-        if getattr(a, "hook", False):
+        hook = getattr(a, "hook", False)
+        if ROOTS:
+            msg = ("several wikis below this directory - cd into one, or set LLM_WIKI_ROOT:\n"
+                   + "\n".join(f"  {shown(r, '.')}" for r in ROOTS))
+            if hook:
+                print(msg)
+            sys.exit(0 if hook else msg)
+        if hook:
             sys.exit(0)
-        sys.exit("not inside an llm-wiki (no .llm-wiki/ here or above) - cd into one, or run: llm-wiki init")
+        sys.exit("no llm-wiki here, above or below (no .llm-wiki/) - cd into one, or run: llm-wiki init")
     sys.exit(a.fn(a))
 
 

@@ -4,14 +4,16 @@ You maintain this wiki. The user curates sources and asks questions; you do the 
 
 ## Layers
 
+This file sits at the wiki root, and the paths in it start there. A session may start in this folder or in one above it; `llm-wiki` finds the wiki either way and prints paths from the current directory.
+
 - `raw/` - the user's sources. Immutable: read them, add new files, never change existing ones. Images in `raw/assets/`.
 - `wiki/` - yours. `sources/` `entities/` `concepts/` `analyses/` + `overview.md` (running synthesis).
   - `index.md` - generated catalog (one line per page). Regenerated from frontmatter by `llm-wiki index`.
   - `log.md` - append-only timeline, written by `llm-wiki log`. Entries: `## [YYYY-MM-DD] op | title`.
 - `AGENTS.md` - this file: the schema of this wiki.
-- `.llm-wiki/` - marks this folder as a wiki. Optional overrides of the plugin's defaults: `templates/<type>.md`, `references/<name>.md`.
+- `.llm-wiki/` - marks this folder as a wiki. Optional overrides of the tooling's defaults: `templates/<type>.md`, `references/<name>.md`.
 
-The tooling is the `llm-wiki` Claude Code plugin: skills (workflows), subagents, hooks (guards) and the `llm-wiki` CLI.
+The tooling is `llm-wiki`: skills (workflows), subagents, hooks (guards) and the `llm-wiki` CLI.
 
 - `llm-wiki --help` - the CLI.
 - `llm-wiki ref <name>` - prints a reference: `page-formats`, `pdf-ingest`, `output-formats`.
@@ -21,9 +23,11 @@ The tooling is the `llm-wiki` Claude Code plugin: skills (workflows), subagents,
 
 Each is a skill.
 
-- **ingest** - user-invoked only (`/llm-wiki:ingest`). A source arrives in `raw/` (or as a URL / paste).
-- **query** - any question the wiki might answer; use it whenever that applies.
-- **lint** - user-invoked only (`/llm-wiki:lint`). Health check, cleanup, gap analysis.
+- **wiki-ingest** - user-invoked only (`/wiki-ingest`). A source arrives in `raw/` (or as a URL / paste).
+- **wiki-query** - any question the wiki might answer; use it whenever that applies. An answer worth keeping is filed after the user confirms it is correct.
+- **wiki-lint** - user-invoked only (`/wiki-lint`). Health check, cleanup, gap analysis. It fixes links and frontmatter and proposes any change to what a page claims.
+
+Outside an ingest the user started, the wiki is written only on the user's word: propose the page edit, the filing or the correction, and make it when they approve.
 
 Never start an ingest or a lint pass yourself. When one looks due (pending sources, a request phrased as "ingest this" / "lint the wiki"), tell the user to run the command.
 
@@ -31,8 +35,8 @@ Never start an ingest or a lint pass yourself. When one looks due (pending sourc
 
 Reading is done in subagents so that this session stays small and each read gets a clear context. This session selects, dispatches, talks to the user, and files.
 
-- **llm-wiki:ingester** - reads and files one source, or one chunk of a large one. Large PDFs: one ingester per chunk writes reading notes to `raw/assets/<stem>/notes/`, then one ingester integrates from the notes - or, past 3 notes files, one ingester per 2-3 notes files, in sequence.
-- **llm-wiki:querier** - read-only; searches, reads, returns a cited answer and whether it is worth filing.
+- **wiki-ingester** - reads and files one source, or one chunk of a large one. Large PDFs: one ingester per chunk writes reading notes to `raw/assets/<stem>/notes/`, then one ingester integrates from the notes - or, past 3 notes files, one ingester per 2-3 notes files, in sequence.
+- **wiki-querier** - read-only; searches, reads, returns a cited answer and whether it is worth filing.
 
 The dispatch sequence is in each skill.
 
@@ -62,7 +66,7 @@ Open `wiki/index.md` only for whole-wiki orientation; search is cheaper for anyt
 
 ## Hooks
 
-The plugin's guard blocks changes to existing `raw/` files (reading notes under `raw/assets/*/notes/` excepted) and direct edits of `index.md` / `log.md`. After each wiki edit the page's frontmatter is validated and the index regenerated. A block message says what to do instead.
+The guard blocks changes to existing `raw/` files (reading notes under `raw/assets/*/notes/` excepted) and direct edits of `index.md` / `log.md`. After each wiki edit the page's frontmatter is validated and the index regenerated. A block message says what to do instead.
 
 ## Evolving this schema
 

@@ -8,17 +8,9 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
-from wikiroot import find_root  # noqa: E402
+from wikiroot import find_roots  # noqa: E402
 
-ROOT = RAW = INDEX = LOG = ""
-
-
-def use(root):
-    global ROOT, RAW, INDEX, LOG
-    ROOT = str(root)
-    RAW = os.path.join(ROOT, "raw")
-    INDEX = os.path.join(ROOT, "wiki", "index.md")
-    LOG = os.path.join(ROOT, "wiki", "log.md")
+ROOTS = []  # the wikis in reach: one in the normal case
 
 MSG = {
     "raw": "raw/ is immutable: read sources, add new files, never change or remove existing ones. "
@@ -38,15 +30,17 @@ def resolve(p, cwd):
 
 
 def kind(path):
-    if path == INDEX:
-        return "index"
-    if path == LOG:
-        return "log"
-    if path == RAW or path.startswith(RAW + os.sep):
-        # reading notes written during ingest are working files, not sources
-        if re.match(r"assets/[^/]+/notes(/|$)", os.path.relpath(path, RAW).replace(os.sep, "/")):
-            return None
-        return "raw"
+    for root in ROOTS:
+        raw = os.path.join(root, "raw")
+        if path == os.path.join(root, "wiki", "index.md"):
+            return "index"
+        if path == os.path.join(root, "wiki", "log.md"):
+            return "log"
+        if path == raw or path.startswith(raw + os.sep):
+            # reading notes written during ingest are working files, not sources
+            if re.match(r"assets/[^/]+/notes(/|$)", os.path.relpath(path, raw).replace(os.sep, "/")):
+                return None
+            return "raw"
     return None
 
 
@@ -61,7 +55,7 @@ def check_file(tool, path):
         return
     if k == "raw" and tool == "Write" and not os.path.exists(path):
         return  # adding a new source is fine
-    deny(k, f"{tool} {os.path.relpath(path, ROOT)}")
+    deny(k, f"{tool} {os.path.relpath(path)}")
 
 
 def overwrites(dst, srcs, cwd):
@@ -132,16 +126,15 @@ def main():
     tool = data.get("tool_name", "")
     inp = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
+    global ROOTS
     if tool == "Bash":
-        root = find_root(cwd)
-        if root:
-            use(root)
+        ROOTS = [str(r) for r in find_roots(cwd)]
+        if ROOTS:
             check_bash(inp.get("command", ""), cwd)
     else:
         path = inp.get("file_path") or inp.get("notebook_path")
-        root = path and find_root(os.path.dirname(resolve(path, cwd)))
-        if root:
-            use(root)
+        if path:
+            ROOTS = [str(r) for r in find_roots(os.path.dirname(resolve(path, cwd)))]
             check_file(tool, resolve(path, cwd))
 
 

@@ -5,36 +5,62 @@
 import datetime
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
-CLI = [sys.executable, str(PLUGIN / "bin" / "llm-wiki")]
 TODAY = datetime.date.today().isoformat()
+PAGE = "---\ntitle: {0}\ntype: concept\nsummary: About {0}\ncreated: {1}\nupdated: {1}\n---\n# {0}\n"
 
 
-class Smoke(unittest.TestCase):
+class Base(unittest.TestCase):
+    """A temporary wiki at `wiki`, with commands run from `cwd` (the session root)."""
+    wiki = cwd = "my-wiki"
+    loose = False  # the tooling as loose files under the session root's .claude/, not at the repository
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.root = Path(cls.tmp.name).resolve() / "my-wiki"
-        cls.env = {k: v for k, v in os.environ.items() if k not in ("LLM_WIKI_ROOT", "CLAUDE_PROJECT_DIR")}
-        r = subprocess.run(CLI + ["init", str(cls.root)], capture_output=True, text=True, env=cls.env)
+        cls.top = Path(cls.tmp.name).resolve()
+        cls.root = cls.top / cls.wiki
+        cls.here = cls.top / cls.cwd
+        cls.here.mkdir(parents=True, exist_ok=True)
+        cls.kit = PLUGIN
+        if cls.loose:
+            cls.kit = cls.here / ".claude"
+            for d in ("skills", "agents", "hooks", "scripts", "bin", "references", "templates"):
+                shutil.copytree(PLUGIN / d, cls.kit / d, ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copy(PLUGIN / "templates" / "project-settings.json", cls.kit / "settings.json")
+        cls.env = {k: v for k, v in os.environ.items()
+                   if k not in ("LLM_WIKI_ROOT", "CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_ENV_FILE")}
+        r = cls.run_cli("init", str(cls.root))
         assert r.returncode == 0, r.stderr
 
     @classmethod
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def cli(self, *args, cwd=None):
-        return subprocess.run(CLI + list(args), capture_output=True, text=True, cwd=cwd or self.root, env=self.env)
+    @classmethod
+    def run_cli(cls, *args, cwd=None, env=None):
+        return subprocess.run([sys.executable, str(cls.kit / "bin" / "llm-wiki"), *args], capture_output=True, text=True,
+                              cwd=cwd or cls.here, env=dict(cls.env, **(env or {})))
+
+    def cli(self, *args, cwd=None, env=None):
+        return self.run_cli(*args, cwd=cwd, env=env)
 
     def hook(self, script, payload, cwd=None):
-        return subprocess.run([sys.executable, str(PLUGIN / "hooks" / script)], input=json.dumps(payload),
-                              capture_output=True, text=True, cwd=cwd or self.root, env=self.env)
+        return subprocess.run([sys.executable, str(self.kit / "hooks" / script)], input=json.dumps(payload),
+                              capture_output=True, text=True, cwd=cwd or self.here, env=self.env)
+
+
+class Smoke(Base):
 
     def test_1_scaffold(self):
         for rel in (".llm-wiki/config.json", "AGENTS.md", ".claude/settings.json", ".gitignore",
@@ -64,14 +90,15 @@ class Smoke(unittest.TestCase):
         with (self.root / "wiki/concepts/memex.md").open("a") as f:
             f.write(f"\nTrails between documents [[bush-1945]]. {filler}\n")
         self.assertIn("wiki/concepts/memex.md", self.cli("search", "memex").stdout)
-        self.assertIn("wiki/sources/bush-1945.md", self.cli("links", "memex", cwd=self.root / "wiki").stdout)
+        self.assertIn("  sources/bush-1945.md", self.cli("links", "memex", cwd=self.root / "wiki").stdout)
         r = self.cli("lint")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("(nothing pending)", self.cli("pending").stdout)
         self.assertIn("3 pages", self.cli("index").stdout)
 
     def test_4_outside_a_wiki(self):
-        out = self.root.parent
+        out = self.top / "elsewhere"
+        out.mkdir()
         self.assertNotEqual(self.cli("lint", cwd=out).returncode, 0)
         r = self.cli("stats", "--hook", cwd=out)
         self.assertEqual((r.returncode, r.stdout), (0, ""))
@@ -111,6 +138,19 @@ class Smoke(unittest.TestCase):
         page.unlink()
         self.cli("index")
 
+    def test_8_ref_prints_the_skills(self):
+        for name in ("ingest", "query", "lint"):
+            self.assertIn(f"name: wiki-{name}", self.cli("ref", name).stdout)
+
+    def test_9_session_start_puts_the_cli_on_path(self):
+        env_file = self.top / "session-env.sh"
+        for _ in range(2):
+            self.assertEqual(self.cli("stats", "--hook", env={"CLAUDE_ENV_FILE": str(env_file)}).returncode, 0)
+        self.assertEqual(env_file.read_text().count("export PATH="), 1)
+        r = subprocess.run(["sh", "-c", f". {shlex.quote(str(env_file))}; cd /; llm-wiki ref"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("page-formats", r.stdout, r.stderr)
+
     def test_7_template_override(self):
         d = self.root / ".llm-wiki" / "templates"
         d.mkdir()
@@ -118,6 +158,145 @@ class Smoke(unittest.TestCase):
                                      "updated: {{date}}\n---\n# {{h1}}\n\n## Custom section\n")
         self.cli("new", "entity", "Vannevar Bush")
         self.assertIn("## Custom section", (self.root / "wiki/entities/vannevar-bush.md").read_text())
+
+
+
+class Project(Base):
+    """The wiki as a subfolder of a project; every command runs from the project root."""
+    wiki, cwd = "proj/docs/wiki", "proj"
+
+    def page(self, slug, root=None):
+        path = (root or self.root) / "wiki" / "concepts" / f"{slug}.md"
+        path.write_text(PAGE.format(slug.title(), TODAY))
+        return path
+
+    def test_1_found_from_the_project_root(self):
+        r = self.cli("stats")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("wiki at docs/wiki (schema: docs/wiki/AGENTS.md)", r.stdout.splitlines()[0])
+        self.assertIn("wiki at docs/wiki", self.cli("stats", "--hook").stdout)
+        sub = self.here / "src" / "deep"
+        sub.mkdir(parents=True)
+        r = self.cli("stats", cwd=sub, env={"CLAUDE_PROJECT_DIR": str(self.here)})
+        self.assertIn("wiki at ../../docs/wiki", r.stdout)
+
+    def test_2_paths_open_from_the_project_root(self):
+        (self.root / "raw" / "adr-1.md").write_text("We chose event sourcing for the ledger.\n")
+        self.assertEqual(self.cli("pending").stdout.strip(), "docs/wiki/raw/adr-1.md")
+        for i, raw in enumerate(("raw/adr-1.md", "docs/wiki/raw/adr-1.md")):
+            r = self.cli("new", "source", f"ADR 1 take {i}", "--raw", raw, "--summary", "Event sourcing for the ledger")
+            page = self.here / r.stdout.strip()
+            self.assertTrue(page.is_file(), r.stdout + r.stderr)
+            self.assertIn("raw: raw/adr-1.md", page.read_text())
+        self.page("ledger")
+        hit = self.cli("search", "ledger", "--type", "concept").stdout.split()[1]
+        self.assertTrue((self.here / hit).is_file(), hit)
+        self.assertIn("docs/wiki/wiki/concepts/ledger.md", self.cli("links", "ledger").stdout)
+        r = self.cli("lint")
+        self.assertIn("docs/wiki/wiki/concepts/ledger.md:", r.stdout)
+        self.assertEqual(self.cli("check", "wiki/concepts/ledger.md").returncode, 0)
+        (self.here / "raw").mkdir()
+        (self.here / "raw" / "adr-1.md").write_text("the project's own file\n")
+        r = self.cli("new", "source", "Not a wiki source", "--raw", "raw/adr-1.md")
+        self.assertIn("raw: raw/adr-1.md", (self.here / r.stdout.strip()).read_text())
+        (self.here / "raw" / "adr-1.md").unlink()
+        (self.here / "raw").rmdir()
+
+    def test_3_guard_from_the_project_root(self):
+        (self.root / "raw" / "spec.md").write_text("spec\n")
+        (self.here / "main.py").write_text("print(1)\n")
+        deny = [("Bash", {"command": "rm docs/wiki/raw/spec.md"}), ("Bash", {"command": "echo x > docs/wiki/raw/spec.md"}),
+                ("Bash", {"command": "cd docs/wiki && rm raw/spec.md"}), ("Edit", {"file_path": "docs/wiki/wiki/index.md"}),
+                ("Edit", {"file_path": "docs/wiki/raw/spec.md"})]
+        allow = [("Edit", {"file_path": "main.py"}), ("Bash", {"command": "rm main.py"}),
+                 ("Write", {"file_path": "docs/wiki/raw/new.md"}), ("Edit", {"file_path": "docs/wiki/wiki/overview.md"})]
+        for tool, inp in deny:
+            r = self.hook("guard.py", {"tool_name": tool, "tool_input": inp, "cwd": str(self.here)})
+            self.assertEqual(r.returncode, 2, (tool, inp))
+        for tool, inp in allow:
+            r = self.hook("guard.py", {"tool_name": tool, "tool_input": inp, "cwd": str(self.here)})
+            self.assertEqual(r.returncode, 0, (tool, inp, r.stderr))
+
+    def test_4_post_edit_from_the_project_root(self):
+        page = self.root / "wiki" / "concepts" / "bad.md"
+        page.write_text("no frontmatter\n")
+        payload = {"tool_name": "Write", "tool_input": {"file_path": "docs/wiki/wiki/concepts/bad.md"}, "cwd": str(self.here)}
+        r = self.hook("post_edit.py", payload)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("docs/wiki/wiki/concepts/bad.md", r.stderr)
+        page.unlink()
+        self.cli("index")
+
+    def test_8_init_names_what_the_session_needs(self):
+        r = self.cli("init", "notes/wiki")
+        self.assertIn("next: drop sources into notes/wiki/raw/, then /wiki-ingest", r.stdout)
+        self.assertIn('a session started here reads its own .claude/settings.json', r.stdout)
+        self.assertNotIn("a session started here", self.cli("init", cwd=self.here / "notes/wiki").stdout)
+        shutil.rmtree(self.here / "notes")
+
+    def test_5_search_limits(self):
+        for rel in ("a/b/c/d/too-deep", "node_modules/pkg", ".hidden/w"):
+            d = self.top / "limits" / rel
+            self.assertEqual(self.run_cli("init", str(d)).returncode, 0)
+        r = self.cli("stats", "--hook", cwd=self.top / "limits")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(self.run_cli("init", str(self.top / "limits/a/b/c/ok")).returncode, 0)
+        self.assertIn("wiki at a/b/c/ok", self.cli("stats", cwd=self.top / "limits").stdout)
+
+    def test_6_two_wikis(self):
+        two = self.top / "two"
+        for name in ("docs/wiki", "notes"):
+            self.assertEqual(self.run_cli("init", str(two / name)).returncode, 0)
+        r = self.cli("lint", cwd=two)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("docs/wiki", r.stderr)
+        self.assertIn("notes", r.stderr)
+        r = self.cli("stats", "--hook", cwd=two)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("several wikis", r.stdout)
+        self.assertEqual(self.cli("lint", cwd=two, env={"LLM_WIKI_ROOT": str(two / "notes")}).returncode, 0)
+        (two / "notes" / "raw" / "s.md").write_text("s\n")
+        r = self.hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": "rm notes/raw/s.md"}, "cwd": str(two)})
+        self.assertEqual(r.returncode, 2)
+
+    def test_7_search_is_quick(self):
+        big = self.top / "big"
+        for i in range(100):
+            d = big / f"pkg{i:03d}" / "src"
+            d.mkdir(parents=True)
+            for j in range(100):
+                (d / f"f{j}.py").touch()
+        sys.path.insert(0, str(self.kit / "scripts"))
+        from wikiroot import find_roots
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            t = time.perf_counter()
+            self.assertEqual(find_roots(big), [])
+            self.assertLess(time.perf_counter() - t, 0.05)
+
+
+class LooseSmoke(Smoke):
+    loose = True
+
+    def test_registered_hooks_exist(self):
+        cfg = json.loads((self.kit / "settings.json").read_text())
+        self.assertIn("Bash(llm-wiki:*)", cfg["permissions"]["allow"])
+        plugin = json.loads((PLUGIN / "hooks" / "hooks.json").read_text())["hooks"]
+        self.assertEqual(sorted(cfg["hooks"]), sorted(plugin))
+        for event, groups in cfg["hooks"].items():
+            self.assertEqual(groups[0].get("matcher"), plugin[event][0].get("matcher"))
+            for h in groups[0]["hooks"]:
+                script = shlex.split(h["command"].replace("${CLAUDE_PROJECT_DIR}", str(self.here)))[1]
+                self.assertTrue(Path(script).is_file(), script)
+
+    def test_session_start_command_runs(self):
+        cmd = json.loads((self.kit / "settings.json").read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=self.here,
+                           env=dict(self.env, CLAUDE_PROJECT_DIR=str(self.here)))
+        self.assertIn("wiki at .", r.stdout, r.stderr)
+
+
+class LooseProject(Project):
+    loose = True
 
 
 if __name__ == "__main__":

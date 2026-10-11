@@ -34,7 +34,7 @@ This shows only wiki pages and drops the two files that link to everything. Unde
 
 ## Getting sources in
 
-- **Obsidian Web Clipper** (browser extension): set the note location to `raw`. Clip an article, then run `/llm-wiki:ingest`.
+- **Obsidian Web Clipper** (browser extension): set the note location to `raw`. Clip an article, then run `/wiki-ingest`.
 - **Download images locally**: Settings → Hotkeys → search "Download attachments for current file" and bind it (e.g. Ctrl+Shift+D). After clipping, press it so the images are saved into `raw/assets/` and the agent can read them.
 - PDFs: drop them into `raw/`.
 

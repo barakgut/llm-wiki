@@ -14,7 +14,7 @@ Output lands in `raw/assets/<stem>/`: `text.md`, every embedded image, a render 
 The plan cuts the PDF into **chunks**: page ranges of at most 15 pages and 30 images. A chunk is what one context reads well; a second chunk read on top of the first starts crowding it out. So:
 
 - **1 chunk** - read it in the context that will also write the wiki pages.
-- **2+ chunks** - one fresh context per chunk, each leaving reading notes on disk; then one fresh context integrates from the notes. The main session dispatches a `llm-wiki:ingester` subagent per chunk (see the ingest skill).
+- **2+ chunks** - one fresh context per chunk, each leaving reading notes on disk; then one fresh context integrates from the notes. The main session dispatches a `wiki-ingester` subagent per chunk (see the ingest skill).
 - **4+ chunks** - integration is chunked too: one fresh context per 2-3 notes files, in document order, one pass after another. The source page carries a `[!todo]` integration-status marker until the last pass removes it.
 
 ## 2. Read a chunk

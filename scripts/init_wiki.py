@@ -5,7 +5,7 @@
   llm-wiki init ~/wikis/research --name "Research" --git
 
 Creates raw/, wiki/, AGENTS.md (the schema), .llm-wiki/ (the marker), .gitignore and
-.claude/settings.json (lets the agent run the llm-wiki CLI without a prompt).
+.claude/settings.json (lets a session started in the wiki run the llm-wiki CLI without a prompt).
 Existing files are never overwritten: whatever is already there is kept and listed.
 """
 import argparse
@@ -17,11 +17,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from wikiroot import MARKER, PLUGIN
+from wikiroot import MARKER, PLUGIN, shown
 
 TEMPLATES = PLUGIN / "templates"
 DIRS = ["raw/assets", "wiki/sources", "wiki/entities", "wiki/concepts", "wiki/analyses"]
-LEGACY = [".claude/scripts/wiki.py", ".claude/hooks/guard.py", ".claude/skills/wiki-ingest"]
 
 
 def main():
@@ -34,7 +33,7 @@ def main():
 
     target = Path(a.target).expanduser().resolve()
     if target == PLUGIN or PLUGIN in target.parents:
-        sys.exit("target must be outside the plugin")
+        sys.exit("target must be outside the tooling")
     name = a.name or target.name.replace("-", " ").replace("_", " ").title()
     today = datetime.date.today().isoformat()
     made, kept = [], []
@@ -63,7 +62,7 @@ def main():
     env = dict(os.environ, LLM_WIKI_ROOT=str(target), PYTHONDONTWRITEBYTECODE="1")
     cli = [sys.executable, str(PLUGIN / "scripts" / "wiki.py")]
     subprocess.run(cli + ["index", "-q"], check=True, env=env)
-    subprocess.run(cli + ["log", "schema", "Scaffold created" if fresh else "Adopted by the llm-wiki plugin"],
+    subprocess.run(cli + ["log", "schema", "Scaffold created" if fresh else "Adopted as an llm-wiki"],
                    check=True, capture_output=True, env=env)
     if a.git and not (target / ".git").exists():
         subprocess.run(["git", "init", "-q", str(target)], check=True)
@@ -73,13 +72,12 @@ def main():
         print("  wrote: " + ", ".join(made))
     if kept:
         print("  kept (already there): " + ", ".join(kept))
+    allow = '"permissions": {"allow": ["Bash(llm-wiki:*)"]}'
     if ".claude/settings.json" in kept:
-        print('  add to .claude/settings.json to skip permission prompts: "permissions": {"allow": ["Bash(llm-wiki:*)"]}')
-    if any((target / p).exists() for p in LEGACY):
-        print("  legacy in-repo tooling found: remove .claude/{skills,agents,hooks,scripts,references} and the hooks in\n"
-              "  .claude/settings.json, or both copies will run. AGENTS.md was kept - compare it with "
-              f"{TEMPLATES / 'AGENTS.md'}")
-    print(f"  next: cd {target} && claude   # drop sources into raw/, then /llm-wiki:ingest")
+        print(f"  add to {shown(target, '.claude/settings.json')} to skip permission prompts: {allow}")
+    if target != Path.cwd().resolve():
+        print(f"  a session started here reads its own .claude/settings.json; to skip permission prompts add: {allow}")
+    print(f"  next: drop sources into {shown(target, 'raw')}/, then /wiki-ingest")
     if not shutil.which("pdftotext"):
         print("  note: PDF ingest needs poppler-utils (pdfinfo, pdftotext, pdfimages, pdftoppm)")
 

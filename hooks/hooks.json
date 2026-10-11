@@ -1,5 +1,5 @@
 {
-  "description": "llm-wiki guard rails: status on session start, raw/ immutability, frontmatter validation and index regeneration. All three do nothing outside a wiki.",
+  "description": "llm-wiki guard rails: status and the CLI on PATH on session start, raw/ immutability, frontmatter validation and index regeneration. All three do nothing outside a wiki.",
   "hooks": {
     "SessionStart": [
       {

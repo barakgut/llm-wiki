@@ -4,6 +4,8 @@ LLM Wiki is a [Claude Code](https://claude.com/claude-code) plugin that turns a 
 
 You collect sources and ask questions. The agent reads each source once, files what it learned into interlinked markdown pages, and keeps those pages current as more sources arrive. Later questions are answered from the wiki, so the agent does not have to work everything out again from the raw documents.
 
+The wiki can be a folder of its own, such as a second brain, or a subfolder of a project, where it holds what the code cannot tell you. It works the same way in both.
+
 You read the wiki in [Obsidian](https://obsidian.md) or any markdown viewer. The agent edits it from Claude Code.
 
 What you get:
@@ -23,6 +25,8 @@ In Claude Code:
 /plugin install llm-wiki@llm-wiki
 ```
 
+Version 0.2.0 renamed the commands: `/llm-wiki:ingest` is now `/llm-wiki:wiki-ingest`, and the same for `init`, `query` and `lint`. This README writes them in the short form, `/wiki-ingest`.
+
 Requirements:
 
 - Claude Code, on macOS, Linux or WSL
@@ -35,61 +39,59 @@ Requirements:
 mkdir ~/wikis/research && cd ~/wikis/research && claude
 ```
 
-1. Run `/llm-wiki:init`. It scaffolds the wiki in the current folder. To put it elsewhere, use `/llm-wiki:init ~/some/dir --name "Research" --git`. Then restart `claude` in the wiki folder so the session picks up its schema and settings.
+1. Run `/wiki-init`. It scaffolds the wiki in the current folder. To put it elsewhere, use `/wiki-init ~/some/dir --name "Research" --git`.
 2. Put a source into `raw/`: a markdown or text file, a PDF, an image.
-3. Run `/llm-wiki:ingest`, or `/llm-wiki:ingest raw/<file>` to pick the source yourself.
+3. Run `/wiki-ingest`, or `/wiki-ingest raw/<file>` to pick the source yourself.
 4. Ask questions.
 
-Each session starts with a status line for the agent: page counts, sources waiting to be ingested, recent log entries.
+Each session starts with a status line for the agent: where the wiki is, page counts, sources waiting to be ingested, recent log entries.
 
-## Using it with an existing code project
+## Using it as a project's knowledge base
 
-The wiki works well as the place where a codebase gets explained: what each module does, why it was built that way, where the documents and the code disagree. Ingest reads what is in `raw/`. It does not crawl your repository, so you decide what goes in.
+Put the wiki in a subfolder of the project and work from the project root, in the same session you code in. The tooling finds a wiki in the current folder, above it, or up to four levels below it, so there is no second session and nothing to configure.
 
-Keep the wiki in its own subfolder, for example `docs/wiki`. Init writes `AGENTS.md`, `.gitignore` and `.claude/settings.json` and keeps any file that already exists, so at the repository root your project's own `AGENTS.md` would stay and the wiki would have no schema. In a subfolder nothing collides, and the hooks only act on files inside the wiki, so your code is not affected.
+The wiki is for what the code cannot tell you: architecture decision records, design documents, specifications, the standards you implement, meeting notes, the reasons behind a choice. Leave the code out of it. The agent reads code directly, and a copy in the wiki would only go stale.
 
-1. From the repository root, in Claude Code:
-
-   ```
-   /llm-wiki:init docs/wiki --name "My Project"
-   ```
-
-   Leave out `--git`. The wiki is committed with the rest of the repository.
-
-2. Start a session in the wiki folder. A wiki needs its own session.
+1. From the project root, in Claude Code:
 
    ```
-   cd docs/wiki && claude
+   /wiki-init docs/wiki --name "My Project"
    ```
 
-3. Copy in the documents the project already has: the README, design docs, ADRs, specs, PDFs of the standards you implement. Copy them; `raw/` holds snapshots the agent can read and never change.
+   Leave out `--git`. The wiki is committed with the rest of the repository. Keep it in a subfolder: init writes `AGENTS.md` and `.gitignore`, and at the project root those would collide with the project's own.
 
-   ```
-   cp ../../README.md raw/project-readme.md
-   cp ../architecture.md raw/
-   ```
+2. Copy documents into `docs/wiki/raw/`. Copy them; `raw/` holds snapshots the agent can read and never change.
 
-4. Add code as snapshots, one module per file. From the repository root:
+3. Ingest one at a time with `/wiki-ingest raw/<file>`. The agent shows its takeaways and waits for your steer.
 
-   ```
-   { for f in $(git ls-files src/auth); do printf '\n===== %s =====\n' "$f"; cat "$f"; done; } > docs/wiki/raw/$(date +%F)-src-auth.txt
-   ```
+4. Ask. "Why did we choose event sourcing for the ledger", "what does the standard require for retries", "which decisions touch billing". Answers cite the pages they came from.
 
-   This joins every tracked file under `src/auth` into one text file with a header line per file. The date in the name tells snapshots of the same module apart.
+5. Commit `docs/wiki` along with your code.
 
-5. Ingest one file at a time with `/llm-wiki:ingest raw/<file>`. The agent shows its takeaways and waits for your steer. For code, say what you want kept, for example "how a request flows through this module and why, skip the line-by-line detail". If you want modules and services as entity pages and design decisions as concept pages, tell the agent to record that in `AGENTS.md` so later sessions do the same.
-
-6. Ask questions in the wiki session: "how does login work", "which modules touch the billing tables", "compare what the ADR says about caching with what the code does". Answers cite the pages they came from, and a comparison like the last one is filed into `wiki/analyses/`.
-
-7. When a module changes enough to matter, take a new dated snapshot and ingest it. The agent merges it into the existing pages and flags where it contradicts what they say.
-
-8. Commit `docs/wiki` along with your code.
-
-To use the wiki from a coding session at the repository root, start Claude Code with `LLM_WIKI_ROOT` set to the wiki's absolute path. The `llm-wiki` CLI and the hooks then act on that wiki.
+Add these lines to the project's own `CLAUDE.md`, so the agent knows the wiki is there and what to do when it and the code disagree:
 
 ```
-LLM_WIKI_ROOT="$PWD/docs/wiki" claude
+Project knowledge that is not in the code (decisions, rationale, specs, standards) is in the wiki at docs/wiki. Query it for such questions.
+If a wiki page contradicts the code, propose a correction to the page and wait for approval.
 ```
+
+When one folder holds several wikis, the tooling asks which one you mean. `cd` into one, or start Claude Code with `LLM_WIKI_ROOT` set to its path.
+
+### The tooling inside the project
+
+The tooling can also live in the project itself, so that a clone works with no plugin installed. The same files go under the project's `.claude/`:
+
+```
+.claude/skills/       wiki-init, wiki-ingest, wiki-query, wiki-lint
+.claude/agents/       wiki-ingester.md, wiki-querier.md
+.claude/hooks/        guard.py, post_edit.py
+.claude/scripts/      the CLI's code
+.claude/bin/llm-wiki  the CLI
+.claude/references/   .claude/templates/
+.claude/settings.json the hooks and the permission to run the CLI
+```
+
+`templates/project-settings.json` is that `settings.json`. The commands are then `/wiki-init`, `/wiki-ingest`, `/wiki-query` and `/wiki-lint`, and the session start hook puts `llm-wiki` on the agent's PATH. Use the plugin or the project copy, not both, or each hook runs twice.
 
 ## What is where
 
@@ -106,14 +108,14 @@ LLM_WIKI_ROOT="$PWD/docs/wiki" claude
 │   └── log.md      timeline of ingests, queries and lint passes (append-only)
 ├── AGENTS.md       the schema: the rules the agent follows in this wiki
 ├── .llm-wiki/      marks the folder as a wiki; holds your overrides, if any
-└── .claude/        settings.json: lets the agent run the llm-wiki CLI without asking
+└── .claude/        settings.json: lets a session started in the wiki run the llm-wiki CLI without asking
 ```
 
-`raw/` and `wiki/` are your data. The skills, subagents, hooks and CLI that operate on them live in the plugin and update with it.
+`raw/` and `wiki/` are your data. The skills, subagents, hooks and CLI that operate on them are the tooling: the plugin, or the copy under a project's `.claude/`.
 
 ## Commands
 
-You run `/llm-wiki:init`, `/llm-wiki:ingest` and `/llm-wiki:lint` yourself. `/llm-wiki:query` runs on its own whenever you ask something the wiki might answer.
+You run `/wiki-init`, `/wiki-ingest` and `/wiki-lint` yourself. `/wiki-query` runs on its own whenever you ask something the wiki might answer. With the plugin the full names are `/llm-wiki:wiki-init` and so on.
 
 ### Ingest
 
@@ -134,11 +136,13 @@ The agent searches the wiki, reads the relevant pages, follows their links, and 
 
 Ask for a shape when you want one: "as a table", "as a timeline", "as a slide deck", "chart it".
 
-When an answer is new synthesis, such as a comparison or a connection across several pages, the agent files it into `wiki/analyses/` so it is not lost in chat history. Say "file that" to keep any answer, or "don't file" to skip.
+When an answer is new synthesis, such as a comparison or a connection across several pages, the agent asks whether it is correct and whether to keep it. Accept it, or say what to change and it asks again. The accepted answer is filed into `wiki/analyses/` so it is not lost in chat history. Say "file that" to keep any other answer, or "don't file" to skip the question.
+
+The agent does not change a page while answering. When it finds something in a raw source that a page is missing, it proposes the edit and makes it when you approve.
 
 ### Lint
 
-Lint has two passes. The mechanical pass looks for broken links, orphan pages, stale pages, stubs, oversized pages, duplicates, unlinked mentions and PDFs with undescribed images. The reading pass looks for contradictions, superseded claims, concepts that deserve a page, and gaps. The agent fixes what the sources settle and reports the rest, with suggested questions and sources to look for. Run it every 5-10 ingests.
+Lint has two passes. The mechanical pass looks for broken links, orphan pages, stale pages, stubs, oversized pages, duplicates, unlinked mentions and PDFs with undescribed images. The reading pass looks for contradictions, superseded claims, concepts that deserve a page, and gaps. The agent fixes links, frontmatter and missing cross-references itself. Anything that changes what a page claims, such as resolving a contradiction, merging duplicates or removing an unsourced claim, it lists as a proposal and applies when you approve. The report ends with suggested questions and sources to look for. Run it every 5-10 ingests.
 
 ### Subagents
 
@@ -146,18 +150,18 @@ The session you talk to stays light. It dispatches two specialised subagents and
 
 | subagent | job | writes? |
 |---|---|---|
-| `llm-wiki:ingester` | reads one source (or one chunk of a large one) and files it into the wiki | yes |
-| `llm-wiki:querier` | searches and reads the wiki, returns a cited answer | no |
+| `wiki-ingester` | reads one source (or one chunk of a large one) and files it into the wiki | yes |
+| `wiki-querier` | searches and reads the wiki, returns a cited answer | no |
 
 Each runs in its own context, reads only what its task needs, and returns a short report. You do not call them yourself.
 
 ## Guard rails
 
-Three hooks run automatically, and only inside a wiki folder:
+Three hooks run automatically, and act only on files inside a wiki:
 
 - The agent cannot modify or delete existing files in `raw/` (its own reading notes excepted), and cannot hand-edit `index.md` or `log.md`.
 - After every wiki edit the page's frontmatter is validated and `index.md` is regenerated.
-- On session start the agent is shown the wiki's status.
+- On session start the agent is shown where the wiki is and its status.
 
 The hooks catch slips. They are not a security boundary.
 
@@ -175,7 +179,7 @@ Open the wiki folder (the one containing `raw/` and `wiki/`) as a vault. Recomme
 
 ## The CLI
 
-The plugin puts `llm-wiki` on the agent's PATH. To use it in your own shell, symlink it: `ln -s <plugin dir>/bin/llm-wiki ~/.local/bin/` (the plugin dir is under `~/.claude/plugins/`). It acts on the wiki containing the current directory.
+The plugin puts `llm-wiki` on the agent's PATH. To use it in your own shell, symlink it: `ln -s <plugin dir>/bin/llm-wiki ~/.local/bin/` (the plugin dir is under `~/.claude/plugins/`). It acts on the wiki containing the current directory, or the one below it. It prints paths relative to the current directory, and takes path arguments relative to it or to the wiki root.
 
 ```
 llm-wiki init [dir] [--name "Name"] [--git]   scaffold a wiki, or adopt an existing folder
@@ -199,13 +203,13 @@ Each wiki carries its own conventions in three places:
 
 ## Adopting an existing folder
 
-`llm-wiki init` in a folder that already has `raw/` and `wiki/` adds only what is missing and overwrites nothing. Pages need the frontmatter described in `llm-wiki ref page-formats`. Run `/llm-wiki:lint` to find what does not conform.
+`llm-wiki init` in a folder that already has `raw/` and `wiki/` adds only what is missing and overwrites nothing. Pages need the frontmatter described in `llm-wiki ref page-formats`. Run `/wiki-lint` to find what does not conform.
 
 ## Development
 
 ```
 claude --plugin-dir /path/to/llm-wiki      # run Claude Code with a local checkout
-python3 -m unittest discover -s tests -v   # smoke tests
+python3 -m unittest discover -s tests -v   # smoke tests, as a plugin and as loose files under .claude/
 claude plugin validate .
 ```
 
