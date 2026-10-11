@@ -3,6 +3,7 @@
   python3 -m unittest discover -s tests -v
 """
 import datetime
+import importlib.util
 import json
 import os
 import shlex
@@ -17,7 +18,23 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
 TODAY = datetime.date.today().isoformat()
+PDF_PAGE = b"BT /F1 12 Tf 72 720 Td (The ledger is event sourced.) Tj ET"
 PAGE = "---\ntitle: {0}\ntype: concept\nsummary: About {0}\ncreated: {1}\nupdated: {1}\n---\n# {0}\n"
+
+
+def pdf_bytes():
+    """A one-page PDF with a text layer."""
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n%s\nendstream" % (len(PDF_PAGE), PDF_PAGE),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, at = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        at.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (i, o)
+    xref = b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % a for a in at)
+    return out + xref + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, len(out))
 
 
 class Base(unittest.TestCase):
@@ -161,6 +178,79 @@ class Smoke(Base):
         self.cli("new", "entity", "Vannevar Bush")
         self.assertIn("## Custom section", (self.root / "wiki/entities/vannevar-bush.md").read_text())
 
+    def test_a_slug_stays_in_the_wiki(self):
+        r = self.cli("new", "concept", "Escape", "--slug", "../../../escaped")
+        self.assertEqual(r.stdout.strip(), "wiki/concepts/escaped.md", r.stderr)
+        r = self.cli("new", "concept", "Absolute", "--slug", str(self.top / "abs"))
+        self.assertEqual((r.returncode, Path(r.stdout.strip()).parent.as_posix()), (0, "wiki/concepts"), r.stderr)
+        self.assertEqual([p for p in (self.top / "escaped.md", self.top / "abs.md") if p.exists()], [])
+        r = self.cli("new", "concept", "No slug", "--slug", "../..")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("slug is empty", r.stderr)
+        for p in self.root.glob("wiki/concepts/*esc*.md"):
+            p.unlink()
+        next(self.root.glob("wiki/concepts/*abs.md")).unlink()
+        self.cli("index")
+
+    def test_b_no_write_through_a_symlink(self):
+        victim = self.top / "victim.txt"
+        victim.write_text("mine\n")
+        outside = self.top / "outside"
+        outside.mkdir()
+        page = self.root / "wiki" / "concepts" / "linked.md"
+        for name, cmds in (("wiki/index.md", [("index",), ("new", "concept", "Via the index")]),
+                           ("wiki/log.md", [("log", "note", "x")])):
+            kept = (self.root / name).read_text()
+            (self.root / name).unlink()
+            (self.root / name).symlink_to(victim)
+            page.write_text(PAGE.format("Linked", TODAY))
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(page)}, "cwd": str(self.root)}
+            self.hook("post_edit.py", payload)
+            for cmd in cmds:
+                r = self.cli(*cmd)
+                self.assertEqual(r.returncode, 1, cmd)
+                self.assertIn(f"not written: {name}", r.stderr)
+            self.assertEqual(victim.read_text(), "mine\n", name)
+            page.unlink()
+            (self.root / name).unlink()
+            (self.root / name).write_text(kept)
+        index, overview = self.root / "wiki" / "index.md", self.root / "wiki" / "overview.md"
+        kept, page_text = index.read_text(), overview.read_text()
+        index.unlink()
+        index.symlink_to(overview)  # a link that stays in the wiki still points at another file
+        self.assertEqual(self.cli("index").returncode, 1)
+        self.assertEqual(overview.read_text(), page_text)
+        index.unlink()
+        index.write_text(kept)
+        (self.root / "wiki" / "analyses").rename(self.root / "wiki" / "analyses.kept")
+        (self.root / "wiki" / "analyses").symlink_to(outside, target_is_directory=True)
+        r = self.cli("new", "analysis", "Through a linked directory")
+        self.assertEqual((r.returncode, list(outside.iterdir())), (1, []), r.stderr)
+        (self.root / "wiki" / "analyses").unlink()
+        (self.root / "wiki" / "analyses.kept").rename(self.root / "wiki" / "analyses")
+        (self.root / "wiki").rename(self.root / "wiki.kept")
+        (self.root / "wiki").symlink_to(outside, target_is_directory=True)
+        for cmd in (("index",), ("log", "note", "x"), ("new", "concept", "Through a linked wiki")):
+            self.assertEqual(self.cli(*cmd).returncode, 1, cmd)
+        self.assertEqual(list(outside.iterdir()), [])
+        (self.root / "wiki").unlink()
+        (self.root / "wiki.kept").rename(self.root / "wiki")
+        self.assertEqual(self.cli("index").returncode, 0)
+        ref = self.root / ".llm-wiki" / "references"
+        ref.mkdir(exist_ok=True)
+        (ref / "page-formats.md").symlink_to(victim)
+        r = self.cli("ref", "page-formats")
+        self.assertIn("# Page formats", r.stdout)
+        self.assertNotIn("mine", r.stdout)
+        (ref / "page-formats.md").unlink()
+        (ref / "page-formats.md").write_text("the wiki's own\n")
+        self.assertEqual(self.cli("ref", "page-formats").stdout, "the wiki's own\n")
+        (ref / "page-formats.md").unlink()
+
+    def test_c_hint_line_only_from_the_hook(self):
+        self.assertIn("wiki-query skill", self.cli("stats", "--hook").stdout.splitlines()[-1])
+        self.assertNotIn("wiki-query skill", self.cli("stats").stdout)
+
 
 
 class Project(Base):
@@ -196,7 +286,14 @@ class Project(Base):
         self.assertIn("docs/wiki/wiki/concepts/ledger.md", self.cli("links", "ledger").stdout)
         r = self.cli("lint")
         self.assertIn("docs/wiki/wiki/concepts/ledger.md:", r.stdout)
-        self.assertEqual(self.cli("check", "wiki/concepts/ledger.md").returncode, 0)
+        bad = self.root / "wiki" / "concepts" / "bad.md"
+        bad.write_text("no frontmatter\n")
+        for form in ("wiki/concepts/", "docs/wiki/wiki/concepts/"):
+            self.assertEqual(self.cli("check", form + "ledger.md").returncode, 0)
+            r = self.cli("check", form + "bad.md")
+            self.assertEqual(r.returncode, 1, form)
+            self.assertTrue(r.stdout.startswith("docs/wiki/wiki/concepts/bad.md:"), r.stdout)
+        bad.unlink()
         (self.here / "raw").mkdir()
         (self.here / "raw" / "adr-1.md").write_text("the project's own file\n")
         r = self.cli("new", "source", "The wiki's file, not the project's", "--raw", "raw/adr-1.md")
@@ -206,6 +303,13 @@ class Project(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("--raw must be a file in the wiki", r.stderr)
         shutil.rmtree(self.here / "raw")
+        for raw in ("wiki/index.md", "docs/wiki/AGENTS.md"):
+            r = self.cli("new", "source", "In the wiki, not under raw", "--raw", raw)
+            self.assertEqual(r.returncode, 1, raw)
+            self.assertIn("--raw must be a file in the wiki, under docs/wiki/raw/", r.stderr)
+        r = self.cli("new", "source", "A file yet to come", "--raw", "raw/nope.md", cwd=self.root / "wiki" / "sources")
+        self.assertIn("raw: raw/nope.md", (self.root / "wiki" / "sources" / r.stdout.strip()).read_text(), r.stderr)
+        (self.root / "wiki" / "sources" / r.stdout.strip()).unlink()
         inner = self.root / "raw" / "raw"
         inner.mkdir()
         (inner / "adr-1.md").write_text("a file the current directory reaches first\n")
@@ -219,8 +323,17 @@ class Project(Base):
         deny = [("Bash", {"command": "rm docs/wiki/raw/spec.md"}), ("Bash", {"command": "echo x > docs/wiki/raw/spec.md"}),
                 ("Bash", {"command": "cd docs/wiki && rm raw/spec.md"}), ("Edit", {"file_path": "docs/wiki/wiki/index.md"}),
                 ("Edit", {"file_path": "docs/wiki/raw/spec.md"})]
+        deny += [("Bash", {"command": c}) for c in (
+            "(cd docs/wiki && rm raw/spec.md)", "{ cd docs/wiki; rm raw/spec.md; }", "pushd docs/wiki; rm raw/spec.md",
+            "git -C docs/wiki rm raw/spec.md", "git --no-pager -C docs -C wiki rm raw/spec.md",
+            "cat main.py >| docs/wiki/raw/spec.md", "dd if=main.py of=docs/wiki/raw/spec.md",
+            "(rm docs/wiki/raw/spec.md)", 'rm "docs/wiki/raw/spec (1).md"')]
         allow = [("Edit", {"file_path": "main.py"}), ("Bash", {"command": "rm main.py"}),
                  ("Write", {"file_path": "docs/wiki/raw/new.md"}), ("Edit", {"file_path": "docs/wiki/wiki/overview.md"})]
+        allow += [("Bash", {"command": c}) for c in (
+            "(cd docs/wiki && cat raw/spec.md)", "pushd docs/wiki; ls raw", "git -C docs/wiki status",
+            "git -C docs/wiki add raw/spec.md", "cat main.py >| out.txt", "dd if=docs/wiki/raw/spec.md of=copy.md",
+            "dd if=main.py of=docs/wiki/raw/new.bin", "cat docs/wiki/raw/spec.md | wc -l")]
         for tool, inp in deny:
             r = self.hook("guard.py", {"tool_name": tool, "tool_input": inp, "cwd": str(self.here)})
             self.assertEqual(r.returncode, 2, (tool, inp))
@@ -272,7 +385,7 @@ class Project(Base):
             r = self.hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": f"rm {name}/raw/s.md"}, "cwd": str(two)})
             self.assertEqual(r.returncode, 2, name)
 
-    def test_7_search_is_quick(self):
+    def test_7_large_tree(self):
         big = self.top / "big"
         for i in range(20):
             for j in range(20):
@@ -280,15 +393,77 @@ class Project(Base):
                     d = big / f"pkg{i:02d}" / f"mod{j:02d}" / f"dir{k:02d}"
                     d.mkdir(parents=True)
                     (d / "f.py").touch()
-        sys.path.insert(0, str(self.kit / "scripts"))
-        from wikiroot import find_roots
+        spec = importlib.util.spec_from_file_location("wikiroot_under_test", self.kit / "scripts" / "wikiroot.py")
+        wikiroot = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wikiroot)
         with mock.patch.dict(os.environ, dict(self.env, CLAUDE_PROJECT_DIR=str(big)), clear=True):
             for start in (big, big / "pkg00"):
-                t = time.perf_counter()
-                self.assertEqual(find_roots(start), [])
-                self.assertLess(time.perf_counter() - t, 0.05)
-            (big / "docs" / "wiki" / ".llm-wiki").mkdir(parents=True)
-            self.assertEqual(find_roots(big / "pkg00"), [big / "docs" / "wiki"])
+                took = []
+                for _ in range(5):
+                    t = time.perf_counter()
+                    self.assertEqual(wikiroot.find_roots(start), ([], True))
+                    took.append(time.perf_counter() - t)
+                self.assertLess(min(took), 0.05)
+        self.assertEqual(wikiroot.find_roots(big / "pkg00"), ([], False))
+
+        # a wiki the search does not reach: say the search was cut short, never "no wiki"
+        far = big / "pkg19" / "mod19" / "wiki"
+        self.assertEqual(self.run_cli("init", str(far)).returncode, 0)
+        (far / "raw" / "s.md").write_text("s\n")
+        r = self.cli("stats", cwd=big)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("stopped after 2,000 directories", r.stderr)
+        self.assertIn("LLM_WIKI_ROOT", r.stderr)
+        r = self.cli("stats", "--hook", cwd=big)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("stopped after 2,000 directories", r.stdout)
+        self.assertIn("stopped after 2,000 directories", self.cli("pdf", "x.pdf", cwd=big).stderr)
+        rm = {"tool_name": "Bash", "tool_input": {"command": "rm pkg19/mod19/wiki/raw/s.md"}, "cwd": str(big)}
+        self.assertEqual(self.hook("guard.py", rm, cwd=big).returncode, 2)
+        self.assertIn("wiki at pkg19/mod19/wiki", self.cli("stats", cwd=big, env={"LLM_WIKI_ROOT": str(far)}).stdout)
+
+        # a wiki it does reach is not taken for the only one
+        near = big / "docs" / "wiki"
+        self.assertEqual(self.run_cli("init", str(near)).returncode, 0)
+        (near / "raw" / "s.md").write_text("s\n")
+        r = self.cli("stats", cwd=big)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("stopped after 2,000 directories", r.stderr)
+        self.assertIn("  docs/wiki", r.stderr)
+        (near / "raw" / "x.pdf").touch()
+        self.assertIn("stopped after 2,000 directories", self.cli("pdf", "docs/wiki/raw/x.pdf", cwd=big).stderr)
+        r = self.cli("stats", "--hook", cwd=big)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("  docs/wiki", r.stdout)
+        self.assertNotIn("wiki at", r.stdout)
+        page = near / "wiki" / "concepts" / "bad.md"
+        page.write_text("no frontmatter\n")
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(page)}, "cwd": str(big)}
+        self.assertEqual(self.hook("post_edit.py", payload, cwd=big).returncode, 2)
+        for name in ("docs/wiki", "pkg19/mod19/wiki"):
+            rm["tool_input"]["command"] = f"rm {name}/raw/s.md"
+            self.assertEqual(self.hook("guard.py", rm, cwd=big).returncode, 2, name)
+        rm["tool_input"]["command"] = "rm pkg00/mod00/dir00/f.py"
+        self.assertEqual(self.hook("guard.py", rm, cwd=big).returncode, 0)
+        self.assertIn("wiki at docs/wiki", self.cli("stats", cwd=big, env={"LLM_WIKI_ROOT": str(near)}).stdout)
+
+    @unittest.skipUnless(shutil.which("pdftotext"), "needs poppler-utils")
+    def test_9_pdf_from_the_project_root(self):
+        (self.root / "raw" / "x.pdf").write_bytes(pdf_bytes())
+        r = self.cli("pdf", "raw/x.pdf")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("-> docs/wiki/raw/assets/x/text.md;", r.stdout)
+        self.assertIn("event sourced", (self.here / "docs/wiki/raw/assets/x/text.md").read_text())
+        self.assertIn('llm-wiki pdf "docs/wiki/raw/x.pdf" --chunk 1', r.stdout)
+        for form in ("raw/x.pdf", "docs/wiki/raw/x.pdf"):
+            self.assertIn("docs/wiki/raw/x.pdf: 1 pages", self.cli("pdf", form, "--plan").stdout, form)
+            lines = self.cli("pdf", form, "--chunk", "1").stdout.splitlines()
+            self.assertIn("text:   Read docs/wiki/raw/assets/x/text.md", lines[1])
+            images = [l.split()[0] for l in lines[3:-1]]
+            self.assertTrue(images and all((self.here / i).is_file() for i in images), lines)
+            self.assertTrue(lines[-1].split()[-1].startswith("docs/wiki/raw/assets/x/notes/"), lines[-1])
+        shutil.rmtree(self.root / "raw" / "assets" / "x")
+        (self.root / "raw" / "x.pdf").unlink()
 
 
 class LooseSmoke(Smoke):

@@ -8,13 +8,13 @@ The wiki can be a folder of its own, such as a second brain, or a subfolder of a
 
 You read the wiki in [Obsidian](https://obsidian.md) or any markdown viewer. The agent edits it from Claude Code.
 
-What you get:
+What it does:
 
-- Cited claims. Entity and concept pages cite the source page each fact came from. When two sources disagree, both pages carry a contradiction flag and both versions are kept.
-- PDFs read in full: the text, every embedded image and a render of every page. A 300-page standard is cut into chunks and each chunk goes to a subagent with a fresh context, so page 290 gets the same attention as page 5.
-- Protected sources. A hook blocks the agent from changing or deleting anything in `raw/`.
-- A lint pass that finds broken links, orphans, stale pages, duplicates, undescribed figures and coverage gaps.
-- Plain files in a folder you own: markdown, wikilinks and YAML frontmatter. The tooling uses the Python standard library only, with no database, embeddings or server.
+- Entity and concept pages cite the source page each fact came from. When two sources disagree, both versions are kept and both pages carry a contradiction flag.
+- A PDF is read in full: its text, its embedded images and a render of every page. A 300-page standard is cut into chunks and each chunk goes to a subagent with a fresh context, so page 290 gets the same attention as page 5.
+- A hook stops the agent from changing or deleting a source you put in `raw/`.
+- A lint pass finds broken links, orphans, stale pages, duplicates, undescribed figures and coverage gaps.
+- The wiki is plain files in a folder you own: markdown, wikilinks and YAML frontmatter. There is no database, embedding index or server, and the tooling needs only the Python standard library.
 
 ## Install
 
@@ -44,13 +44,13 @@ mkdir ~/wikis/research && cd ~/wikis/research && claude
 3. Run `/wiki-ingest`, or `/wiki-ingest raw/<file>` to pick the source yourself.
 4. Ask questions.
 
-Each session starts with a status line for the agent: where the wiki is, page counts, sources waiting to be ingested, recent log entries.
+Each session starts with a short status for the agent: where the wiki is, how many pages it has, which sources are waiting to be ingested, and the last few log entries.
 
 ## Using it as a project's knowledge base
 
-Put the wiki in a subfolder of the project and work from the project root, in the same session you code in. The tooling finds a wiki in the current folder, above it, or up to four levels below it (in a very large tree, among the 2,000 folders nearest the top), so there is no second session and nothing to configure.
+Put the wiki in a subfolder of the project and work from the project root, in the same session you code in. The tooling finds a wiki in the current folder, above it, or up to four levels below it, so one session does for both. Below the current folder it skips hidden folders and `node_modules`, `vendor`, `venv`, `dist`, `build`, `target` and `__pycache__`, so keep the wiki out of those.
 
-The wiki is for what the code cannot tell you: architecture decision records, design documents, specifications, the standards you implement, meeting notes, the reasons behind a choice. Leave the code out of it. The agent reads code directly, and a copy in the wiki would only go stale.
+The wiki is for what the code cannot tell you: architecture decision records, design documents, specifications, the standards you implement, meeting notes, the reasons behind a choice. Leave the code out of it: the agent reads code directly, and a copy in the wiki would go stale.
 
 1. From the project root, in Claude Code:
 
@@ -58,13 +58,15 @@ The wiki is for what the code cannot tell you: architecture decision records, de
    /wiki-init docs/wiki --name "My Project"
    ```
 
-   Leave out `--git`. The wiki is committed with the rest of the repository. Keep it in a subfolder: init writes `AGENTS.md` and `.gitignore`, and at the project root those would collide with the project's own.
+   Leave out `--git`, since the wiki is committed with the rest of the repository. Keep it in a subfolder: init writes `AGENTS.md`, `.gitignore` and `.claude/settings.json`, and it never overwrites a file, so at the project root the project's own files would stay and the wiki would go without its schema.
 
-2. Copy documents into `docs/wiki/raw/`. Copy them; `raw/` holds snapshots the agent can read and never change.
+   Init also prints a `permissions` line. Add it to the project's `.claude/settings.json` and the agent can run `llm-wiki` without asking each time.
+
+2. Copy documents into `docs/wiki/raw/`. Copy them instead of moving or linking them, because `raw/` holds snapshots that the agent reads and never changes.
 
 3. Ingest one at a time with `/wiki-ingest raw/<file>`. The agent shows its takeaways and waits for your steer.
 
-4. Ask. "Why did we choose event sourcing for the ledger", "what does the standard require for retries", "which decisions touch billing". Answers cite the pages they came from.
+4. Ask: "Why did we choose event sourcing for the ledger", "what does the standard require for retries", "which decisions touch billing". Answers cite the pages they came from.
 
 5. Commit `docs/wiki` along with your code.
 
@@ -75,7 +77,7 @@ Project knowledge that is not in the code (decisions, rationale, specs, standard
 If a wiki page contradicts the code, propose a correction to the page and wait for approval.
 ```
 
-When one folder holds several wikis, the tooling asks which one you mean. `cd` into one, or start Claude Code with `LLM_WIKI_ROOT` set to its path.
+When it finds several wikis below the current folder, the tooling picks none of them and lists them. `cd` into one, or start Claude Code with `LLM_WIKI_ROOT` set to its path. A very large tree gets the same treatment. The search below a folder stops after looking at 2,000 folders, and when it stops that way the tooling says so, lists any wiki it had found and uses none of them. A session started in such a tree sees that message at startup, even if the tree has no wiki in it.
 
 ### The tooling inside the project
 
@@ -91,7 +93,7 @@ The tooling can also live in the project itself, so that a clone works with no p
 .claude/settings.json the hooks and the permission to run the CLI
 ```
 
-`templates/project-settings.json` is that `settings.json`. The commands are then `/wiki-init`, `/wiki-ingest`, `/wiki-query` and `/wiki-lint`, and the session start hook puts `llm-wiki` on the agent's PATH. Use the plugin or the project copy, not both, or each hook runs twice.
+`templates/project-settings.json` is that `settings.json`. There is no install step, so you copy the files yourself. The commands are then `/wiki-init`, `/wiki-ingest`, `/wiki-query` and `/wiki-lint`, and the session start hook puts `llm-wiki` on the agent's PATH. Use the plugin or the project copy, not both, or each hook runs twice.
 
 ## What is where
 
@@ -108,6 +110,7 @@ The tooling can also live in the project itself, so that a clone works with no p
 │   └── log.md      timeline of ingests, queries and lint passes (append-only)
 ├── AGENTS.md       the schema: the rules the agent follows in this wiki
 ├── .llm-wiki/      marks the folder as a wiki; holds your overrides, if any
+├── .gitignore
 └── .claude/        settings.json: lets a session started in the wiki run the llm-wiki CLI without asking
 ```
 
@@ -126,34 +129,34 @@ You run `/wiki-init`, `/wiki-ingest` and `/wiki-lint` yourself. `/wiki-query` ru
 
 One source typically touches 5-15 pages. You can also paste text or give a URL, and the agent saves it into `raw/` first.
 
-PDFs are ingested as full text plus every image. The agent extracts the text layer, every embedded image, and a render of every page into `raw/assets/<pdf-name>/`, reads all of them, and writes a description of each image. Scanned pages are transcribed. Lint fails until every extracted image has an entry, so no image goes unread. Images under 48px (icons, bullets) and exact repeats are left out and listed in `manifest.json`.
+PDFs are ingested as full text plus every image. The agent extracts the text layer, the embedded images and a render of every page into `raw/assets/<pdf-name>/`, reads all of them, and writes a description of each image. It transcribes scanned pages. Lint reports an error for every extracted image that has no description yet. Images under 48px (icons, bullets) and exact repeats are left out and listed in `manifest.json`.
 
-Large PDFs are cut into chunks of at most 15 pages and 30 images. A separate subagent with a fresh context reads each chunk and writes reading notes to `raw/assets/<pdf-name>/notes/`. A final subagent writes the wiki pages from those notes. For a PDF of more than 3 chunks, a sequence of subagents does that, each taking 2-3 notes files. An interrupted ingest resumes at the first chunk without notes. Expect it to take a while and to use many tokens, because every page is looked at as an image.
+Large PDFs are cut into chunks of at most 15 pages and 30 images. A separate subagent with a fresh context reads each chunk and writes reading notes to `raw/assets/<pdf-name>/notes/`. Up to four of them run at a time. A final subagent writes the wiki pages from those notes. For a PDF of more than 3 chunks a sequence of subagents does the writing, each taking 2-3 notes files. An interrupted ingest resumes at the first chunk without notes. Expect it to take a while and to use many tokens, because every page is looked at as an image.
 
 ### Query
 
-The agent searches the wiki, reads the relevant pages, follows their links, and answers with citations like `[[page-name]]`. It tells you what is its own inference and what the wiki does not cover.
+The agent searches the wiki, reads the relevant pages, follows their links, and answers with citations like `[[page-name]]`. It marks what is its own inference and says what the wiki does not cover.
 
 Ask for a shape when you want one: "as a table", "as a timeline", "as a slide deck", "chart it".
 
-When an answer is new synthesis, such as a comparison or a connection across several pages, the agent asks whether it is correct and whether to keep it. Accept it, or say what to change and it asks again. The accepted answer is filed into `wiki/analyses/` so it is not lost in chat history. Say "file that" to keep any other answer, or "don't file" to skip the question.
+When an answer is new synthesis, such as a comparison or a connection across several pages, the agent asks whether it is correct and whether to keep it. Accept it, or say what to change and it asks again. The accepted answer is filed into `wiki/analyses/`, where later questions can find it. Say "file that" to keep any other answer, or "don't file" to skip the question.
 
 The agent does not change a page while answering. When it finds something in a raw source that a page is missing, it proposes the edit and makes it when you approve.
 
 ### Lint
 
-Lint has two passes. The mechanical pass looks for broken links, orphan pages, stale pages, stubs, oversized pages, duplicates, unlinked mentions and PDFs with undescribed images. The reading pass looks for contradictions, superseded claims, concepts that deserve a page, and gaps. The agent fixes links, frontmatter and missing cross-references itself. Anything that changes what a page claims, such as resolving a contradiction, merging duplicates or removing an unsourced claim, it lists as a proposal and applies when you approve. The report ends with suggested questions and sources to look for. Run it every 5-10 ingests.
+Lint has two passes. The mechanical pass looks for broken links, orphan pages, stale pages, stubs, oversized pages, duplicates, unlinked mentions and PDFs with undescribed images. The reading pass looks for contradictions, superseded claims, concepts that deserve a page, and gaps. The agent fixes links, frontmatter and missing cross-references itself. Anything that changes what a page claims, such as resolving a contradiction, merging duplicates or removing an unsourced claim, it lists as a proposal and applies when you approve. Until you do, `llm-wiki lint` can still show an error whose fix is one of those proposals. The report ends with suggested questions and sources to look for. Run it every 5-10 ingests.
 
 ### Subagents
 
-The session you talk to stays light. It dispatches two specialised subagents and relays their results.
+The session you talk to does little reading itself. It dispatches two subagents and relays their results.
 
 | subagent | job | writes? |
 |---|---|---|
 | `wiki-ingester` | reads one source (or one chunk of a large one) and files it into the wiki | yes |
 | `wiki-querier` | searches and reads the wiki, returns a cited answer | no |
 
-Each runs in its own context, reads only what its task needs, and returns a short report. You do not call them yourself.
+Each runs in its own context and returns a short report. You do not call them yourself.
 
 ## Guard rails
 
@@ -163,15 +166,17 @@ Three hooks run automatically, and act only on files inside a wiki:
 - After every wiki edit the page's frontmatter is validated and `index.md` is regenerated.
 - On session start the agent is shown where the wiki is and its status.
 
-The hooks catch slips. They are not a security boundary.
+The CLI has a check of its own: it will not write `index.md`, `log.md` or a new page through a symlink, or to a path that ends up outside `wiki/`.
+
+All of this is there to catch the agent's slips. None of it is a security boundary.
 
 ## Good habits
 
-- Ingest one source at a time and read the summary. Your steer is what shapes the wiki.
+- Ingest one source at a time and read the summary. What you tell the agent to emphasize decides what ends up on the pages.
 - Edit the wiki through the agent. If you edit a page by hand, tell the agent so it can reconcile.
 - To change or remove a source in `raw/`, do it yourself, since the agent is blocked from it, then ask it to re-ingest.
-- When you settle on a convention ("always tag by project", "track people's roles"), tell the agent to record it in `AGENTS.md`. That file is how the next session knows.
-- Commit to git after each ingest. The history is your undo.
+- When you settle on a convention ("always tag by project", "track people's roles"), tell the agent to record it in `AGENTS.md`. The next session reads the convention from there.
+- Commit to git after each ingest, so that you can undo one.
 
 ## Obsidian
 
@@ -179,7 +184,7 @@ Open the wiki folder (the one containing `raw/` and `wiki/`) as a vault. Recomme
 
 ## The CLI
 
-The plugin puts `llm-wiki` on the agent's PATH. To use it in your own shell, symlink it: `ln -s <plugin dir>/bin/llm-wiki ~/.local/bin/` (the plugin dir is under `~/.claude/plugins/`). It acts on the wiki containing the current directory, or the one below it. It prints paths relative to the current directory, and takes path arguments relative to it or to the wiki root.
+The plugin puts `llm-wiki` on the agent's PATH. To use it in your own shell, symlink it: `ln -s <plugin dir>/bin/llm-wiki ~/.local/bin/` (the plugin dir is under `~/.claude/plugins/`). It acts on the wiki containing the current directory, or the one below it. It prints paths relative to the current directory, and takes path arguments relative to it or to the wiki root; when both exist, the current directory wins.
 
 ```
 llm-wiki init [dir] [--name "Name"] [--git]   scaffold a wiki, or adopt an existing folder
@@ -193,6 +198,8 @@ llm-wiki pdf raw/<file>.pdf                   extract a PDF's text and images
 llm-wiki ref [name]                           print a reference document
 ```
 
+`llm-wiki --help` lists the rest, which the agent and the hooks use.
+
 ## Customising
 
 Each wiki carries its own conventions in three places:
@@ -200,6 +207,8 @@ Each wiki carries its own conventions in three places:
 - `AGENTS.md` holds the rules. Change them by telling the agent, or edit the file directly.
 - `.llm-wiki/templates/<type>.md` is your own layout for `source`, `entity`, `concept` or `analysis` pages. Start from [templates/](templates/).
 - `.llm-wiki/references/<name>.md` is your own version of `page-formats`, `pdf-ingest` or `output-formats`. Start from `llm-wiki ref <name>`.
+
+A template or reference that is a symlink to somewhere outside `.llm-wiki/` is ignored, and the tooling's copy is used.
 
 ## Adopting an existing folder
 

@@ -62,7 +62,8 @@ Open `wiki/index.md` only for whole-wiki orientation; search is cheaper for anyt
 - A PDF is ingested as its full text plus every image in it, chunk by chunk, each image described in the reading notes or on the source page or its `-figures` sibling (`llm-wiki ref pdf-ingest`).
 - Sources disagree → keep both, flag with a `> [!contradiction]` callout on each affected page.
 - Editing a page sets `updated:` to today.
-- Finish every ingest, filed query and lint pass with `llm-wiki lint` at 0 errors and a `llm-wiki log` entry.
+- Finish every ingest and filed query with `llm-wiki lint` at 0 errors and a `llm-wiki log` entry.
+- A lint pass ends with a `llm-wiki log` entry too. An error it leaves is one whose fix changes a claim: that fix is a proposal and waits for the user's approval.
 
 ## Hooks
 

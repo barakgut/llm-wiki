@@ -30,10 +30,10 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from wikiroot import PLUGIN, find_roots, given, kit, several, shown
+from wikiroot import PLUGIN, find_roots, given, kit, shown, unsettled
 
-ROOTS = find_roots()
-ROOT = ROOTS[0] if len(ROOTS) == 1 else None
+ROOTS, CUT = find_roots()
+ROOT = ROOTS[0] if len(ROOTS) == 1 and not CUT else None
 NO_WIKI = ROOT is None
 ROOT = ROOT or Path.cwd()
 WIKI = ROOT / "wiki"
@@ -66,6 +66,12 @@ def slugify(s):
 
 def show(rel):
     return shown(ROOT, rel)
+
+
+def own(path):
+    """Stop before a write unless `path` is the wiki's own file: no symlink, and under wiki/ once links are followed."""
+    if path.is_symlink() or WIKI not in path.resolve().parents:
+        sys.exit(f"not written: {show(path.relative_to(ROOT))} is a symlink or leads outside {show('wiki')}/")
 
 
 # ---------- frontmatter ----------
@@ -310,11 +316,12 @@ def cmd_links(a):
 # ---------- new ----------
 
 def raw_rel(arg):
-    """The `raw:` value of a source page: the file's path from the wiki root. None for a file outside the wiki."""
+    """The `raw:` value of a source page: the file's path from the wiki root, or the argument as given
+    for a file that does not exist. None for a file outside raw/."""
     p = given(ROOT, arg)
-    if ROOT in p.parents:
-        return p.relative_to(ROOT).as_posix()
-    return None if p.exists() else arg
+    if not p.exists():
+        return arg
+    return p.relative_to(ROOT).as_posix() if RAW in p.parents else None
 
 
 def cmd_new(a):
@@ -325,7 +332,10 @@ def cmd_new(a):
     if raw is None:
         print(f"--raw must be a file in the wiki, under {show('raw')}/: {a.raw}", file=sys.stderr)
         return 1
-    slug = a.slug or slugify(a.title)
+    slug = slugify(a.slug or a.title)
+    if not slug:
+        print("the slug is empty: give a title or --slug with a letter or digit in it", file=sys.stderr)
+        return 1
     for p in load_pages():
         if p.slug == slug:
             print(f"exists: {show(p.rel)} - update it instead", file=sys.stderr)
@@ -338,6 +348,7 @@ def cmd_new(a):
     for k, v in fill.items():
         tpl = tpl.replace("{{" + k + "}}", v)
     path = WIKI / TYPE_DIR[a.type] / f"{slug}.md"
+    own(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tpl, encoding="utf-8")
     write_index(load_pages())
@@ -377,6 +388,7 @@ def render_index(pages):
 def write_index(pages):
     new = render_index(pages)
     if not INDEX.exists() or INDEX.read_text(encoding="utf-8") != new:
+        own(INDEX)
         INDEX.parent.mkdir(parents=True, exist_ok=True)
         INDEX.write_text(new, encoding="utf-8")
         return True
@@ -406,6 +418,7 @@ def cmd_log(a):
     if not a.title:
         print("usage: llm-wiki log <op> \"<title>\" [-m note]", file=sys.stderr)
         return 1
+    own(LOG)
     if not LOG.exists():
         LOG.parent.mkdir(parents=True, exist_ok=True)
         LOG.write_text("# Log\n\n<!-- Append-only. Add entries with `llm-wiki log`. -->\n",
@@ -754,15 +767,12 @@ def main():
     if getattr(a, "hook", False):
         on_path()
     if NO_WIKI and a.cmd != "ref":
-        hook = getattr(a, "hook", False)
-        if ROOTS:
-            msg = several(ROOTS)
-            if hook:
-                print(msg)
-            sys.exit(0 if hook else msg)
-        if hook:
-            sys.exit(0)
-        sys.exit("no llm-wiki here, above or below (no .llm-wiki/) - cd into one, or run: llm-wiki init")
+        msg = unsettled(ROOTS, CUT)
+        if not getattr(a, "hook", False):
+            sys.exit(msg)
+        if ROOTS or CUT:
+            print(msg)
+        sys.exit(0)
     sys.exit(a.fn(a))
 
 

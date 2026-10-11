@@ -8,9 +8,10 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
-from wikiroot import find_roots  # noqa: E402
+from wikiroot import above, find_roots  # noqa: E402
 
 ROOTS = []  # the wikis in reach: one in the normal case
+CUT = False  # the search for them was cut short, so a path is also asked for the wiki above it
 
 MSG = {
     "raw": "raw/ is immutable: read sources, add new files, never change or remove existing ones. "
@@ -22,7 +23,7 @@ MSG = {
 DESTRUCT = {"rm", "rmdir", "unlink", "truncate", "shred", "chmod", "chown"}
 COPIERS = {"cp", "mv", "install", "ln", "rsync"}
 PREFIX = {"sudo", "command", "env", "time", "nohup", "xargs"}
-REDIR = re.compile(r">>?\s*(?!&)([^\s;&|<>()]+)")
+REDIR = re.compile(r">[>|]?\s*(?!&)([^\s;&|<>()]+)")
 
 
 def resolve(p, cwd):
@@ -30,7 +31,8 @@ def resolve(p, cwd):
 
 
 def kind(path):
-    for root in ROOTS:
+    up = above(path) if CUT else None
+    for root in ROOTS + ([str(up)] if up else []):
         raw = os.path.join(root, "raw")
         if path == os.path.join(root, "wiki", "index.md"):
             return "index"
@@ -74,12 +76,12 @@ def overwrites(dst, srcs, cwd):
 
 
 def check_bash(command, cwd):
-    for seg in re.split(r"&&|\|\||;|\n|\|", command):
+    for seg in re.split(r"&&|\|\||;|\n|(?<!>)\|", command):
         for target in REDIR.findall(seg):
             k = overwrites(target.strip("\"'"), [], cwd)
             if k:
                 deny(k, f"redirect to {target}")
-        seg = REDIR.sub(" ", seg)
+        seg = re.sub(r"^[\s({]+|[\s)]+$", "", REDIR.sub(" ", seg))  # ( cd dir && cmd )
         try:
             toks = shlex.split(seg)
         except ValueError:
@@ -88,20 +90,24 @@ def check_bash(command, cwd):
             toks.pop(0)
         if not toks:
             continue
-        cmd, rest = os.path.basename(toks[0]), toks[1:]
+        cmd, rest, at = os.path.basename(toks[0]), toks[1:], cwd
+        while cmd == "git" and "-C" in rest[:-1]:
+            i = rest.index("-C")
+            at = resolve(rest[i + 1], at)
+            del rest[i:i + 2]
         args = [t for t in rest if not t.startswith("-")]
-        kinds = [kind(resolve(a, cwd)) for a in args]
+        kinds = [kind(resolve(a, at)) for a in args]
         hit = next((k for k in kinds if k), None)
         what = " ".join(toks)[:80]
 
-        if cmd == "cd" and args:
+        if cmd in ("cd", "pushd") and args:
             cwd = resolve(args[0], cwd)
         elif cmd in DESTRUCT and hit:
             deny(hit, what)
         elif cmd in ("sed", "perl") and hit and any(re.match(r"^(-[a-zA-Z]*i|--in-place)", t) for t in rest):
             deny(hit, what)
-        elif cmd == "tee":
-            for a in args:
+        elif cmd in ("tee", "dd"):
+            for a in args if cmd == "tee" else [t[3:] for t in rest if t.startswith("of=")]:
                 k = overwrites(a, [], cwd)
                 if k:
                     deny(k, what)
@@ -126,16 +132,16 @@ def main():
     tool = data.get("tool_name", "")
     inp = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
-    global ROOTS
-    if tool == "Bash":
-        ROOTS = [str(r) for r in find_roots(cwd)]
-        if ROOTS:
-            check_bash(inp.get("command", ""), cwd)
-    else:
-        path = inp.get("file_path") or inp.get("notebook_path")
-        if path:
-            ROOTS = [str(r) for r in find_roots(os.path.dirname(resolve(path, cwd)))]
-            check_file(tool, resolve(path, cwd))
+    global ROOTS, CUT
+    path = inp.get("file_path") or inp.get("notebook_path")
+    if tool != "Bash" and not path:
+        return
+    roots, CUT = find_roots(cwd if tool == "Bash" else os.path.dirname(resolve(path, cwd)))
+    ROOTS = [str(r) for r in roots]
+    if tool != "Bash":
+        check_file(tool, resolve(path, cwd))
+    elif ROOTS or CUT:
+        check_bash(inp.get("command", ""), cwd)
 
 
 if __name__ == "__main__":

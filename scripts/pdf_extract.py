@@ -27,10 +27,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from wikiroot import find_roots, given, several, shown
+from wikiroot import find_roots, given, shown, unsettled
 
-ROOTS = find_roots()
-ROOT = ROOTS[0] if len(ROOTS) == 1 else Path.cwd()
+ROOTS, CUT = find_roots()
+ROOT = ROOTS[0] if len(ROOTS) == 1 and not CUT else Path.cwd()
 RAW = ROOT / "raw"
 TOOLS = ["pdfinfo", "pdftotext", "pdfimages", "pdftoppm"]
 CAPTION = re.compile(r"^\s*(Figure|Fig\.|Chart|Diagram|Scheme|Plate|Graph|Illustration)\s*\d", re.I | re.M)
@@ -108,10 +108,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="re-extract over an existing extraction (notes/ is kept)")
     a = ap.parse_args()
 
-    if len(ROOTS) > 1:
-        sys.exit(several(ROOTS))
-    if not ROOTS:
-        sys.exit("no llm-wiki here, above or below (no .llm-wiki/) - cd into one, or run: llm-wiki init")
+    if len(ROOTS) != 1 or CUT:
+        sys.exit(unsettled(ROOTS, CUT))
     pdf = given(ROOT, a.pdf)
     if not pdf.is_file():
         sys.exit(f"not a file: {a.pdf}")
